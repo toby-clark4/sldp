@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 from __future__ import print_function, division
 import argparse, gc, sys
 import numpy as np
@@ -8,7 +7,6 @@ import ypy.memo as memo
 import ypy.fs as fs
 import ypy.pretty as pretty
 import sldp.config as config
-
 
 def main():
     parser = argparse.ArgumentParser()
