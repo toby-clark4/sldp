@@ -3,6 +3,7 @@ import gc
 import gzip
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -114,7 +115,7 @@ def run(args: argparse.Namespace) -> None:
 
             # write
             print("writing output")
-            with gzip.open(annot.RV_filename(c), "wt") as f:
+            with gzip.open(Path(annot.RV_filename(c)), "wt") as f:
                 snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(f, index=False, sep="\t")
 
             del snps

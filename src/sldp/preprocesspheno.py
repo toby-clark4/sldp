@@ -4,6 +4,7 @@ import gzip
 import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -55,8 +56,8 @@ def run(args: argparse.Namespace) -> None:
     ld_frames = [pd.read_csv(args.ldscores_chr + str(c) + ".l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
     ld = pd.concat([frame for frame in ld_frames if not frame.empty], axis=0)
 
-    def read_m_file(path: str) -> int:
-        with open(path) as handle:
+    def read_m_file(path: str | Path) -> int:
+        with Path(path).open() as handle:
             return int(next(handle))
 
     if args.no_M_5_50:
@@ -94,7 +95,7 @@ def run(args: argparse.Namespace) -> None:
         print("h2g is now", h2g)
 
     # write h2g results to file
-    dirname = args.sumstats_stem + "." + args.refpanel_name
+    dirname = Path(f"{args.sumstats_stem}.{args.refpanel_name}")
     fs.makedir(dirname)
     if 1 in args.chroms:
         print("writing info file")
@@ -108,7 +109,7 @@ def run(args: argparse.Namespace) -> None:
                 }
             ]
         )
-        info.to_csv(dirname + "/info", sep="\t", index=False)
+        info.to_csv(dirname / "info", sep="\t", index=False)
 
     # preprocess ld blocks
     t0 = time.time()
@@ -159,7 +160,7 @@ def run(args: argparse.Namespace) -> None:
             x_h = snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_h")
 
         print("writing processed sumstats")
-        with gzip.open("{}/{}.pss.gz".format(dirname, c), "w") as f:
+        with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:
             snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(f, index=False, sep="\t")
 
         del snps

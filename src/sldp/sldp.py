@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,17 @@ class AnnotationContext:
     marginal_names: list[str]
     background_names: list[str]
     marginal_infos: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class AnnotationResult:
+    """Computed statistics for a single marginal annotation."""
+
+    row: dict[str, float | str]
+    q: np.ndarray
+    r: np.ndarray
+    mux: np.ndarray
+    muy: np.ndarray
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -319,6 +331,89 @@ def _collect_block_statistics(
     return numerators, denominators, ldblocks
 
 
+def _compute_annotation_result(
+    args: argparse.Namespace,
+    pheno_name: str,
+    name: str,
+    annotation_context: AnnotationContext,
+    index: int,
+    h2g: float,
+    sigma2g: float,
+    chunk_nums: list[np.ndarray],
+    chunk_denoms: list[np.ndarray],
+    loo_nums: list[np.ndarray],
+    loo_denoms: list[np.ndarray],
+) -> AnnotationResult:
+    """Compute regression statistics for one marginal annotation."""
+
+    background_count = len(annotation_context.background_names)
+    sqnorm = annotation_context.marginal_infos.loc[name[:-2], "sqnorm"]
+    supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
+    M = annotation_context.marginal_infos.loc[name[:-2], "M"]
+
+    mu = cs.get_est(sum(chunk_nums), sum(chunk_denoms), index, background_count)
+    q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, background_count, index)
+    se = cs.jackknife_se(mu, loo_nums, loo_denoms, index, background_count)
+
+    row: dict[str, float | str] = {
+        "pheno": pheno_name,
+        "annot": name,
+    }
+
+    if args.bothp or not args.fastp:
+        p_emp, z_emp = cs.signflip(q, args.T, printmem=True, mode=args.stat)
+        row["z"] = z_emp
+        row["p"] = p_emp
+    if args.bothp or args.fastp:
+        z_fast = np.sum(q) / np.linalg.norm(q)
+        p_fast = st.chi2.sf(z_fast**2, 1)
+        row["z_fast"] = z_fast
+        row["p_fast"] = p_fast
+    if args.fastp and not args.bothp:
+        row["p"] = row["p_fast"]
+        row["z"] = row["z_fast"]
+        del row["p_fast"]
+        del row["z_fast"]
+
+    row["mu"] = mu
+    row["se(mu)"] = se
+    row["h2g"] = h2g
+
+    if args.more_stats:
+        row["qkurtosis"] = st.kurtosis(q)
+        row["qstd"] = np.std(q)
+        row["p_jk"] = st.chi2.sf((mu / se) ** 2, 1)
+        row["sqnorm"] = sqnorm
+
+    row["rf"] = mu * np.sqrt(sqnorm / h2g)
+    row["h2v/h2g"] = row["rf"] ** 2 - row["se(mu)"] ** 2 * sqnorm / (M * sigma2g)
+    row["h2v"] = row["h2v/h2g"] * h2g
+    row["supp(v)/M"] = supp / M
+
+    return AnnotationResult(row=row, q=q, r=r, mux=mux, muy=muy)
+
+
+def _write_verbose_outputs(
+    outfile_stem: str,
+    pheno_name: str,
+    name: str,
+    background_names: list[str],
+    chunkinfo: pd.DataFrame,
+    result: AnnotationResult,
+) -> None:
+    """Write per-annotation chunk and coefficient outputs for verbose runs."""
+
+    fname = f"{outfile_stem}.{pheno_name}.{name}"
+    print("writing verbose results to", fname)
+    verbose_chunkinfo = chunkinfo.copy()
+    verbose_chunkinfo["q"] = result.q
+    verbose_chunkinfo["r"] = result.r
+    verbose_chunkinfo.to_csv(fname + ".chunks", sep="\t", index=False)
+
+    coeffs = pd.DataFrame({"annot": background_names, "mux": result.mux, "muy": result.muy})
+    coeffs.to_csv(fname + ".coeffs", sep="\t", index=False)
+
+
 def run(args: argparse.Namespace) -> None:
     """Execute SLDP regression from a parsed argument namespace."""
 
@@ -351,84 +446,51 @@ def run(args: argparse.Namespace) -> None:
     chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = cs.collapse_to_chunks(ldblocks, numerators, denominators, args.jk_blocks)
 
     # compute final results
-    global q, results
-    results = pd.DataFrame()
+    result_rows: list[dict[str, float | str]] = []
     for i, name in enumerate(annotation_context.marginal_names):
         print(i, name)
-        # metadata about v
-        sqnorm = annotation_context.marginal_infos.loc[name[:-2], "sqnorm"]
-        supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
-
-        # estimate mu and initialize results row
-        k = i
-        mu = cs.get_est(sum(chunk_nums), sum(chunk_denoms), k, len(annotation_context.background_names))
-        newrow_results = {"pheno": pheno_name, "annot": name}
-        results = pd.concat([results, pd.DataFrame([newrow_results])], ignore_index=True)
-
-        # compute q
-        q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, len(annotation_context.background_names), k)
-
-        # p-values
-        if args.bothp or not args.fastp:
-            p_emp, z_emp = cs.signflip(q, args.T, printmem=True, mode=args.stat)
-            results.loc[i, "z"] = z_emp
-            results.loc[i, "p"] = p_emp
-        if args.bothp or args.fastp:
-            z_fast = np.sum(q) / np.linalg.norm(q)
-            p_fast = st.chi2.sf(z_fast**2, 1)
-            results.loc[i, "z_fast"] = z_fast
-            results.loc[i, "p_fast"] = p_fast
-        if args.fastp and not args.bothp:  # if only fastp, rename the output columns
-            results.loc[i, "p"] = results.loc[i, "p_fast"]
-            results.loc[i, "z"] = results.loc[i, "z_fast"]
-            results.drop(["p_fast", "z_fast"], axis=1, inplace=True)
-
-        # jackknife
-        se = cs.jackknife_se(mu, loo_nums, loo_denoms, k, len(annotation_context.background_names))
-        results.loc[i, "mu"] = mu
-        results.loc[i, "se(mu)"] = se
+        annotation_result = _compute_annotation_result(
+            args=args,
+            pheno_name=pheno_name,
+            name=name,
+            annotation_context=annotation_context,
+            index=i,
+            h2g=h2g,
+            sigma2g=sigma2g,
+            chunk_nums=chunk_nums,
+            chunk_denoms=chunk_denoms,
+            loo_nums=loo_nums,
+            loo_denoms=loo_denoms,
+        )
+        result_rows.append(annotation_result.row)
+        current_p = float(annotation_result.row["p"])
 
         # print verbose information if required
-        if results.loc[i].p < args.verbose_thresh:
-            fname = args.outfile_stem + "." + pheno_name + "." + name
-            print("writing verbose results to", fname)
-            chunkinfo["q"] = q
-            chunkinfo["r"] = r
-            chunkinfo.to_csv(fname + ".chunks", sep="\t", index=False)
-            coeffs = pd.DataFrame()
-            coeffs["annot"] = annotation_context.background_names
-            coeffs["mux"] = mux
-            coeffs["muy"] = muy
-            coeffs.to_csv(fname + ".coeffs", sep="\t", index=False)
+        if current_p < args.verbose_thresh:
+            _write_verbose_outputs(
+                outfile_stem=args.outfile_stem,
+                pheno_name=pheno_name,
+                name=name,
+                background_names=annotation_context.background_names,
+                chunkinfo=chunkinfo,
+                result=annotation_result,
+            )
 
         # nominate interesting loci if desired
-        if results.loc[i].p < args.tell_me_stories:
+        if current_p < args.tell_me_stories:
             storyteller.write(
                 args.outfile_stem + "." + name + ".loci",
                 args,
                 name,
                 annotation_context.background_names,
-                mux,
-                muy,
-                results.loc[i].z,
+                annotation_result.mux,
+                annotation_result.muy,
+                float(annotation_result.row["z"]),
                 corr_thresh=args.story_corr_thresh,
             )
 
-        # add more output if desired
-        if args.more_stats:
-            results.loc[i, "qkurtosis"] = st.kurtosis(q)
-            results.loc[i, "qstd"] = np.std(q)
-            results.loc[i, "p_jk"] = st.chi2.sf((mu / se) ** 2, 1)
-            results.loc[i, "sqnorm"] = sqnorm
-
-        # add estimates of rf, h2v, and other associated quantities
-        M = annotation_context.marginal_infos.loc[name[:-2], "M"]
-        results.loc[i, "h2g"] = h2g
-        results.loc[i, "rf"] = mu * np.sqrt(sqnorm / h2g)
-        results.loc[i, "h2v/h2g"] = results.loc[i].rf ** 2 - results.loc[i, "se(mu)"] ** 2 * sqnorm / (M * sigma2g)
-        results.loc[i, "h2v"] = results.loc[i, "h2v/h2g"] * h2g
-        results.loc[i, "supp(v)/M"] = supp / M
-        results.to_csv(args.outfile_stem + ".gwresults", sep="\t", index=False, na_rep="nan")
+    results = pd.DataFrame(result_rows)
+    results.to_csv(args.outfile_stem + ".gwresults", sep="\t", index=False, na_rep="nan")
 
     print(results)
     print("writing results to", args.outfile_stem + ".gwresults")
