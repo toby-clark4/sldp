@@ -19,7 +19,7 @@ def _best_svd(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     try:
         u, singular_values, _ = np.linalg.svd(matrix.T)
         singular_values = singular_values**2 / matrix.shape[0]
-    except np.linalg.linalg.LinAlgError:
+    except np.linalg.LinAlgError:
         print("\t\tresorting to svd of XTX")
         u, singular_values, _ = np.linalg.svd(matrix.T.dot(matrix))
         singular_values = singular_values / matrix.shape[0]
@@ -146,6 +146,8 @@ def run(args: argparse.Namespace) -> None:
         snps = _prepare_chromosome_snps(refpanel, c, print_snps)
 
         for ldblock, X, meta, _ in refpanel.block_data(ldblocks, c, meta=snps):
+            if X is None or meta is None:
+                raise ValueError("reference panel block processing requires genotypes and metadata")
             if meta.printsnp.sum() == 0:
                 print("no print snps found in this block")
                 continue

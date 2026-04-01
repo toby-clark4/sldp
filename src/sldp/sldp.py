@@ -296,6 +296,8 @@ def _collect_block_statistics(
             genos=False,
             verbose=0,
         ):
+            if meta is None:
+                raise ValueError("main SLDP regression requires block metadata")
             r_path = svd_stem / f"{ldblock.name}.R.npz"
             r2_path = svd_stem / f"{ldblock.name}.R2.npz"
             if meta.typed.sum() == 0 or not r_path.exists():
@@ -362,7 +364,7 @@ def _compute_annotation_result(
     supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
     M = annotation_context.marginal_infos.loc[name[:-2], "M"]
 
-    mu = cs.get_est(sum(chunk_nums), sum(chunk_denoms), index, background_count)
+    mu = cs.get_est(sum(chunk_nums, np.zeros_like(chunk_nums[0])), sum(chunk_denoms, np.zeros_like(chunk_denoms[0])), index, background_count)
     q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, background_count, index)
     se = cs.jackknife_se(mu, loo_nums, loo_denoms, index, background_count)
 
@@ -372,7 +374,10 @@ def _compute_annotation_result(
     }
 
     if args.bothp or not args.fastp:
-        p_emp, z_emp = cs.signflip(q, args.T, printmem=True, mode=args.stat)
+        signflip_result = cs.signflip(q, args.T, printmem=True, mode=args.stat)
+        if signflip_result is None:
+            raise ValueError(f"Unsupported signflip mode: {args.stat}")
+        p_emp, z_emp = signflip_result
         row["z"] = z_emp
         row["p"] = p_emp
     if args.bothp or args.fastp:
@@ -396,9 +401,11 @@ def _compute_annotation_result(
         row["p_jk"] = st.chi2.sf((mu / se) ** 2, 1)
         row["sqnorm"] = sqnorm
 
-    row["rf"] = mu * np.sqrt(sqnorm / h2g)
-    row["h2v/h2g"] = row["rf"] ** 2 - row["se(mu)"] ** 2 * sqnorm / (M * sigma2g)
-    row["h2v"] = row["h2v/h2g"] * h2g
+    rf = mu * np.sqrt(sqnorm / h2g)
+    h2v_over_h2g = rf**2 - se**2 * sqnorm / (M * sigma2g)
+    row["rf"] = rf
+    row["h2v/h2g"] = h2v_over_h2g
+    row["h2v"] = h2v_over_h2g * h2g
     row["supp(v)/M"] = supp / M
 
     return AnnotationResult(row=row, q=q, r=r, mux=mux, muy=muy)
@@ -527,8 +534,6 @@ def main() -> None:
 
 # preprocess any sumstats that need preprocessing
 def preprocess_sumstats(args: argparse.Namespace) -> None:
-    import os
-
     if args.pss_chr is None:
         unprocessed_chroms = [c for c in args.chroms if not os.path.exists(args.sumstats_stem + "." + args.refpanel_name + "/" + str(c) + ".pss.gz")]
         if len(unprocessed_chroms) > 0:
@@ -564,8 +569,6 @@ def preprocess_sumstats(args: argparse.Namespace) -> None:
 
 # preprocess any annotations that need preprocessing
 def preprocess_sannots(args: argparse.Namespace) -> None:
-    import os
-
     for sannot in args.sannot_chr:
         unprocessed_chroms = [
             c for c in args.chroms if not (os.path.exists(sannot + str(c) + ".RV.gz") and os.path.exists(sannot + str(c) + ".info"))

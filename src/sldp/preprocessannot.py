@@ -98,6 +98,8 @@ def _compute_rv_values(
     """Fill per-SNP RV values for one chromosome."""
 
     for _, X, meta, ind in refpanel.block_data(ldblocks, chrom, meta=snps):
+        if X is None or meta is None:
+            raise ValueError("annotation RV computation requires genotypes and metadata")
         if meta.printsnp.sum() == 0:
             print("no print-snps in this block")
             continue
@@ -118,7 +120,11 @@ def _write_rv_output(snps: pd.DataFrame, names: list[str], result_names: list[st
 
     print("writing output")
     with gzip.open(output_path, "wt") as handle:
-        snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + result_names].to_csv(handle, index=False, sep="\t")
+        snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + result_names].to_csv(
+            handle,
+            index=False,
+            sep="\t",
+        )
 
 
 def run(args: argparse.Namespace) -> None:

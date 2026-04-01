@@ -1,9 +1,9 @@
 import argparse
 import gc
 import gzip
-import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -67,7 +67,7 @@ def _filter_sumstats(sumstats: pd.DataFrame, print_snps: pd.DataFrame) -> pd.Dat
     return sumstats
 
 
-def _read_ld_scores(ldscores_chr: str) -> tuple[pd.DataFrame, callable]:
+def _read_ld_scores(ldscores_chr: str) -> tuple[pd.DataFrame, Callable[[str | Path], int]]:
     """Load LD score tables and return an M-file reader helper."""
 
     print("reading in ld scores")
@@ -140,6 +140,8 @@ def _process_chromosome(
     snps["R_Winv_ahat_h"] = np.nan
 
     for ldblock, _, meta, ind in refpanel.block_data(ldblocks, chrom, meta=snps):
+        if meta is None:
+            raise ValueError("phenotype preprocessing requires block metadata")
         svd_r_path = Path(f"{svd_stem}{ldblock.name}.R.npz")
         svd_r2_path = Path(f"{svd_stem}{ldblock.name}.R2.npz")
         if meta.printsnp.sum() == 0 or not svd_r_path.exists():
