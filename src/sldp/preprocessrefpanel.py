@@ -1,6 +1,7 @@
 import argparse
 import gc
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,25 @@ import sldp.dataset as gd
 import sldp.fs as fs
 import sldp.memo as memo
 import sldp.pretty as pretty
+
+
+def _best_svd(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute a stable right-hand SVD, falling back to XTX when needed."""
+
+    try:
+        u, singular_values, _ = np.linalg.svd(matrix.T)
+        singular_values = singular_values**2 / matrix.shape[0]
+    except np.linalg.linalg.LinAlgError:
+        print("\t\tresorting to svd of XTX")
+        u, singular_values, _ = np.linalg.svd(matrix.T.dot(matrix))
+        singular_values = singular_values / matrix.shape[0]
+    return u, singular_values
+
+
+def _svd_output_path(svd_stem: str | Path, block_name: int, suffix: str) -> Path:
+    """Build the output path for a saved block SVD artifact."""
+
+    return Path(f"{svd_stem}{block_name}.{suffix}.npz")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,22 +125,12 @@ def run(args: argparse.Namespace) -> None:
             mask = meta.printsnp.values
             X_ = X[:, mask]
 
-            def bestsvd(A):
-                try:
-                    U_, svs_, _ = np.linalg.svd(A.T)
-                    svs_ = svs_**2 / A.shape[0]
-                except np.linalg.linalg.LinAlgError:
-                    print("\t\tresorting to svd of XTX")
-                    U_, svs_, _ = np.linalg.svd(A.T.dot(A))
-                    svs_ = svs_ / A.shape[0]
-                return U_, svs_
-
             # compute the (right-hand) SVD of R
             print("\tcomputing SVD of R_print")
-            U_, svs_ = bestsvd(X_)
+            U_, svs_ = _best_svd(X_)
             k = np.argmax(np.cumsum(svs_) / svs_.sum() >= args.spectrum_percent / 100.0)
             print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
-            np.savez("{}{}.R".format(args.svd_stem, ldblock.name), U=U_[:, :k], svs=svs_[:k])
+            np.savez(_svd_output_path(args.svd_stem, ldblock.name, "R"), U=U_[:, :k], svs=svs_[:k])
 
             # compute the SVD of R2
             print("\tcomputing R2_print")
@@ -130,7 +140,7 @@ def run(args: argparse.Namespace) -> None:
             k = np.argmax(np.cumsum(R2_svs) / R2_svs.sum() >= args.spectrum_percent / 100.0)
             print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
             np.savez(
-                "{}{}.R2".format(args.svd_stem, ldblock.name),
+                _svd_output_path(args.svd_stem, ldblock.name, "R2"),
                 U=R2_U[:, :k],
                 svs=R2_svs[:k],
             )

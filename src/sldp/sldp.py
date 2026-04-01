@@ -232,8 +232,9 @@ def _load_ldblocks(path: str) -> pd.DataFrame:
 def _load_trait_info(pss_chr: str) -> tuple[str, float, float]:
     """Load phenotype naming and heritability metadata from processed sumstats."""
 
-    pheno_name = pss_chr.split("/")[-2].replace(".KG3.95", "")
-    sumstats_info = pd.read_csv(pss_chr + "info", sep="\t")
+    pss_path = Path(pss_chr)
+    pheno_name = pss_path.name.replace(".KG3.95", "")
+    sumstats_info = pd.read_csv(pss_path / "info", sep="\t")
     sigma2g = sumstats_info.loc[0].sigma2g
     h2g = sumstats_info.loc[0].h2g
     return pheno_name, sigma2g, h2g
@@ -252,6 +253,8 @@ def _collect_block_statistics(
     denominators: dict[int, np.ndarray] = {}
     t0 = time.time()
     combined_annotation_names = annotation_context.background_names + annotation_context.marginal_names
+    pss_path = Path(args.pss_chr)
+    svd_stem = Path(args.svd_stem)
     annotation_groups = list(zip(annotation_context.background_annots, annotation_context.background_name_groups)) + list(
         zip(annotation_context.annots, annotation_context.marginal_name_groups)
     )
@@ -263,7 +266,7 @@ def _collect_block_statistics(
         print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
 
         print("reading sumstats")
-        ss = pd.read_csv(args.pss_chr + str(c) + ".pss.gz", sep="\t")
+        ss = pd.read_csv(pss_path / f"{c}.pss.gz", sep="\t")
         print(np.isnan(ss[args.weights]).sum(), "sumstats nans out of", len(ss))
         snps["Winv_ahat"] = ss[args.weights]
         snps["N"] = ss.N
@@ -286,8 +289,16 @@ def _collect_block_statistics(
         if (np.array(combined_annotation_names) != snps.columns.values[-len(combined_annotation_names) :]).any():
             raise ValueError("Merged annotations are not in the right order")
 
-        for ldblock, _, meta, _ in refpanel.block_data(ldblocks, c, meta=snps, genos=False, verbose=0):
-            if meta.typed.sum() == 0 or not os.path.exists(args.svd_stem + str(ldblock.name) + ".R.npz"):
+        for ldblock, _, meta, _ in refpanel.block_data(
+            ldblocks,
+            c,
+            meta=snps,
+            genos=False,
+            verbose=0,
+        ):
+            r_path = svd_stem / f"{ldblock.name}.R.npz"
+            r2_path = svd_stem / f"{ldblock.name}.R2.npz"
+            if meta.typed.sum() == 0 or not r_path.exists():
                 ldblocks.loc[ldblock.name, "M_H"] = 0
                 continue
             if (meta[combined_annotation_names] == 0).values.all():
@@ -301,13 +312,13 @@ def _collect_block_statistics(
             meta_t = meta[meta.typed.values]
             N = meta_t.N.mean()
             if args.weights in {"Winv_ahat_h", "Winv_ahat_hlN"}:
-                R = np.load(args.svd_stem + str(ldblock.name) + ".R.npz")
+                R = np.load(r_path)
                 R2 = None
                 if len(R["U"]) != len(meta):
                     raise ValueError("regression wgts dimension must match regression snps")
             elif args.weights in {"Winv_ahat_h2", "Winv_ahat"}:
-                R = np.load(args.svd_stem + str(ldblock.name) + ".R.npz")
-                R2 = np.load(args.svd_stem + str(ldblock.name) + ".R2.npz")
+                R = np.load(r_path)
+                R2 = np.load(r2_path)
                 if len(R["U"]) != len(meta) or len(R2["U"]) != len(meta):
                     raise ValueError("regression wgts dimension must match regression snps")
             else:
@@ -403,15 +414,15 @@ def _write_verbose_outputs(
 ) -> None:
     """Write per-annotation chunk and coefficient outputs for verbose runs."""
 
-    fname = f"{outfile_stem}.{pheno_name}.{name}"
+    fname = Path(f"{outfile_stem}.{pheno_name}.{name}")
     print("writing verbose results to", fname)
     verbose_chunkinfo = chunkinfo.copy()
     verbose_chunkinfo["q"] = result.q
     verbose_chunkinfo["r"] = result.r
-    verbose_chunkinfo.to_csv(fname + ".chunks", sep="\t", index=False)
+    verbose_chunkinfo.to_csv(f"{fname}.chunks", sep="\t", index=False)
 
     coeffs = pd.DataFrame({"annot": background_names, "mux": result.mux, "muy": result.muy})
-    coeffs.to_csv(fname + ".coeffs", sep="\t", index=False)
+    coeffs.to_csv(f"{fname}.coeffs", sep="\t", index=False)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -423,6 +434,7 @@ def run(args: argparse.Namespace) -> None:
     print("initializing...")
 
     refpanel = gd.Dataset(args.bfile_reg_chr)
+    outfile_path = Path(args.outfile_stem)
     if args.seed is not None:
         np.random.seed(args.seed)
         print("random seed:", args.seed)
@@ -479,7 +491,7 @@ def run(args: argparse.Namespace) -> None:
         # nominate interesting loci if desired
         if current_p < args.tell_me_stories:
             storyteller.write(
-                args.outfile_stem + "." + name + ".loci",
+                f"{outfile_path}.{name}.loci",
                 args,
                 name,
                 annotation_context.background_names,
@@ -490,11 +502,12 @@ def run(args: argparse.Namespace) -> None:
             )
 
     results = pd.DataFrame(result_rows)
-    results.to_csv(args.outfile_stem + ".gwresults", sep="\t", index=False, na_rep="nan")
+    gwresults_path = outfile_path.with_name(outfile_path.name + ".gwresults")
+    results.to_csv(gwresults_path, sep="\t", index=False, na_rep="nan")
 
     print(results)
-    print("writing results to", args.outfile_stem + ".gwresults")
-    results.to_csv(args.outfile_stem + ".gwresults", sep="\t", index=False, na_rep="nan")
+    print("writing results to", gwresults_path)
+    results.to_csv(gwresults_path, sep="\t", index=False, na_rep="nan")
     print("done")
 
 

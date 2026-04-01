@@ -26,7 +26,12 @@ def run(args: argparse.Namespace) -> None:
     annots = [ga.Annotation(annot) for annot in args.sannot_chr]
 
     # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    ldblocks = pd.read_csv(
+        args.ld_blocks,
+        sep=r"\s+",
+        header=None,
+        names=["chr", "start", "end"],
+    )
     mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
     ldblocks = ldblocks[~mhcblocks]
     print(len(ldblocks), "loci after removing MHC")
@@ -116,7 +121,11 @@ def run(args: argparse.Namespace) -> None:
             # write
             print("writing output")
             with gzip.open(Path(annot.RV_filename(c)), "wt") as f:
-                snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(f, index=False, sep="\t")
+                snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(
+                    f,
+                    index=False,
+                    sep="\t",
+                )
 
             del snps
             memo.reset()

@@ -25,16 +25,28 @@ def run(args: argparse.Namespace) -> None:
 
     # read in refpanel, ld blocks, and svd snps
     refpanel = gd.Dataset(args.bfile_chr)
-    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    ldblocks = pd.read_csv(
+        args.ld_blocks,
+        sep=r"\s+",
+        header=None,
+        names=["chr", "start", "end"],
+    )
     print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
     print_snps["printsnp"] = True
     print(len(print_snps), "svd snps")
 
     # read sumstats
     print("reading sumstats", args.sumstats_stem)
-    ss = pd.read_csv(args.sumstats_stem + ".sumstats.gz", sep="\t")
+    ss = pd.read_csv(f"{args.sumstats_stem}.sumstats.gz", sep="\t")
     ss = ss[ss.Z.notnull() & ss.N.notnull()]
-    print("{} snps, {}-{} individuals (avg: {})".format(len(ss), np.min(ss.N), np.max(ss.N), np.mean(ss.N)))
+    print(
+        "{} snps, {}-{} individuals (avg: {})".format(
+            len(ss),
+            np.min(ss.N),
+            np.max(ss.N),
+            np.mean(ss.N),
+        )
+    )
 
     # filter to monoallelic SNPs only (remove indels and multi-allelic variants)
     ss["is_monoallelic"] = (ss.A1.str.len() == 1) & (ss.A2.str.len() == 1)
@@ -53,7 +65,7 @@ def run(args: argparse.Namespace) -> None:
 
     # read ld scores
     print("reading in ld scores")
-    ld_frames = [pd.read_csv(args.ldscores_chr + str(c) + ".l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
+    ld_frames = [pd.read_csv(f"{args.ldscores_chr}{c}.l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
     ld = pd.concat([frame for frame in ld_frames if not frame.empty], axis=0)
 
     def read_m_file(path: str | Path) -> int:
@@ -61,9 +73,9 @@ def run(args: argparse.Namespace) -> None:
             return int(next(handle))
 
     if args.no_M_5_50:
-        M = sum([read_m_file(args.ldscores_chr + str(c) + ".l2.M") for c in range(1, 23)])
+        M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M") for c in range(1, 23)])
     else:
-        M = sum([read_m_file(args.ldscores_chr + str(c) + ".l2.M_5_50") for c in range(1, 23)])
+        M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M_5_50") for c in range(1, 23)])
     print(len(ld), "snps with ld scores")
     ssld = pd.merge(ss, ld, on="SNP", how="left")
     print(len(ssld), "hm3 snps with sumstats after merge.")
@@ -142,7 +154,9 @@ def run(args: argparse.Namespace) -> None:
 
         # restrict to ld blocks in this chr and process them in chunks
         for ldblock, X, meta, ind in refpanel.block_data(ldblocks, c, meta=snps):
-            if meta.printsnp.sum() == 0 or not os.path.exists(args.svd_stem + str(ldblock.name) + ".R.npz"):
+            svd_r_path = Path(f"{args.svd_stem}{ldblock.name}.R.npz")
+            svd_r2_path = Path(f"{args.svd_stem}{ldblock.name}.R2.npz")
+            if meta.printsnp.sum() == 0 or not svd_r_path.exists():
                 print("no svd snps found in this block")
                 continue
             print(meta.printsnp.sum(), "svd snps", meta.typed.sum(), "typed snps")
@@ -150,14 +164,28 @@ def run(args: argparse.Namespace) -> None:
                 print("no typed snps found in this block")
                 snps.loc[ind, ["R_Winv_ahat_I", "R_Winv_ahat_h"]] = 0
                 continue
-            R = np.load(args.svd_stem + str(ldblock.name) + ".R.npz")
-            R2 = np.load(args.svd_stem + str(ldblock.name) + ".R2.npz")
+            R = np.load(svd_r_path)
+            R2 = np.load(svd_r2_path)
             N = meta[meta.typed.values].N.mean()
             meta_svd = meta[meta.printsnp.values]
 
             # multiply ahat by the weights
-            x_I = snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_I")
-            x_h = snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_h")
+            snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(
+                R,
+                R2,
+                sigma2g,
+                N,
+                meta_svd.ahat.values,
+                mode="Winv_ahat_I",
+            )
+            snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(
+                R,
+                R2,
+                sigma2g,
+                N,
+                meta_svd.ahat.values,
+                mode="Winv_ahat_h",
+            )
 
         print("writing processed sumstats")
         with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:
