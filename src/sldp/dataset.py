@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Iterator
 from pathlib import Path
 import time
@@ -119,9 +117,7 @@ class Dataset:
             blockstarts_ind = np.searchsorted(snps.BP.values, chunk_blocks.start.values)
             blockends_ind = np.searchsorted(snps.BP.values, chunk_blocks.end.values)
             if verbose >= 1 and len(blockstarts_ind) > 0:
-                print(
-                    f"{time.time() - t0} : chr {c} snps {blockstarts_ind[0]} - {blockends_ind[-1]}"
-                )
+                print(f"{time.time() - t0} : chr {c} snps {blockstarts_ind[0]} - {blockends_ind[-1]}")
 
             if genos:
                 Xchunk = self.stdX(c, (blockstarts_ind[0], blockends_ind[-1]))
@@ -129,32 +125,14 @@ class Dataset:
             else:
                 Xchunk = None
 
-            metachunk = (
-                meta.iloc[blockstarts_ind[0] : blockends_ind[-1]]
-                if meta is not None
-                else None
-            )
+            metachunk = meta.iloc[blockstarts_ind[0] : blockends_ind[-1]] if meta is not None else None
 
             blockends_ind = blockends_ind - blockstarts_ind[0]
             blockstarts_ind = blockstarts_ind - blockstarts_ind[0]
-            for i, start_ind, end_ind in zip(
-                chunk_blocks.index, blockstarts_ind, blockends_ind
-            ):
+            for i, start_ind, end_ind in zip(chunk_blocks.index, blockstarts_ind, blockends_ind):
                 if verbose >= 2:
-                    print(
-                        f"{time.time() - t0} : processing ld block {i} , {end_ind - start_ind} snps"
-                    )
-                X = (
-                    Xchunk[:, start_ind:end_ind]
-                    if genos and Xchunk is not None
-                    else None
-                )
-                metablock = (
-                    metachunk.iloc[start_ind:end_ind] if metachunk is not None else None
-                )
-                index = (
-                    metachunk.iloc[start_ind:end_ind].index
-                    if metachunk is not None
-                    else snps.iloc[start_ind:end_ind].index
-                )
+                    print(f"{time.time() - t0} : processing ld block {i} , {end_ind - start_ind} snps")
+                X = Xchunk[:, start_ind:end_ind] if genos and Xchunk is not None else None
+                metablock = metachunk.iloc[start_ind:end_ind] if metachunk is not None else None
+                index = metachunk.iloc[start_ind:end_ind].index if metachunk is not None else snps.iloc[start_ind:end_ind].index
                 yield chr_blocks.loc[i], X, metablock, index

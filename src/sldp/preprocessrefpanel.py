@@ -74,7 +74,7 @@ def run(args: argparse.Namespace) -> None:
     fs.makedir_for_file(args.svd_stem)
 
     # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(args.ld_blocks, sep="\s+", header=None, names=["chr", "start", "end"])
+    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
     mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
     ldblocks = ldblocks[~mhcblocks]
     print(len(ldblocks), "loci after removing MHC")
