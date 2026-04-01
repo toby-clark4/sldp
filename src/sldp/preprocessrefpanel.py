@@ -32,6 +32,51 @@ def _svd_output_path(svd_stem: str | Path, block_name: int, suffix: str) -> Path
     return Path(f"{svd_stem}{block_name}.{suffix}.npz")
 
 
+def _load_ldblocks(path: str) -> pd.DataFrame:
+    """Load LD blocks and remove those overlapping the MHC region."""
+
+    mhc = [25684587, 35455756]
+    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
+    return ldblocks[~mhcblocks]
+
+
+def _load_print_snps(path: str) -> pd.DataFrame:
+    """Load the set of SNPs retained in the reduced regression panel."""
+
+    print_snps = pd.read_csv(path, header=None, names=["SNP"])
+    print_snps["printsnp"] = True
+    return print_snps
+
+
+def _prepare_chromosome_snps(refpanel: gd.Dataset, chrom: int, print_snps: pd.DataFrame) -> pd.DataFrame:
+    """Load chromosome metadata and mark the printed SNP subset."""
+
+    snps = refpanel.bim_df(chrom)
+    snps = pd.merge(snps, print_snps, on="SNP", how="left")
+    snps["printsnp"] = snps.printsnp.notnull()
+    print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
+    return snps
+
+
+def _save_block_svds(X_print: np.ndarray, block_name: int, svd_stem: str | Path, spectrum_percent: float, num_print_snps: int) -> None:
+    """Compute and save truncated SVDs for R and R2 for one LD block."""
+
+    print("\tcomputing SVD of R_print")
+    U_, svs_ = _best_svd(X_print)
+    k = np.argmax(np.cumsum(svs_) / svs_.sum() >= spectrum_percent / 100.0)
+    print("\treduced rank of", k, "out of", num_print_snps, "printed snps")
+    np.savez(_svd_output_path(svd_stem, block_name, "R"), U=U_[:, :k], svs=svs_[:k])
+
+    print("\tcomputing R2_print")
+    r2 = X_print.T.dot(X_print.dot(X_print.T)).dot(X_print) / X_print.shape[0] ** 2
+    print("\tcomputing SVD of R2_print")
+    r2_u, r2_svs, _ = np.linalg.svd(r2)
+    k = np.argmax(np.cumsum(r2_svs) / r2_svs.sum() >= spectrum_percent / 100.0)
+    print("\treduced rank of", k, "out of", num_print_snps, "printed snps")
+    np.savez(_svd_output_path(svd_stem, block_name, "R2"), U=r2_u[:, :k], svs=r2_svs[:k])
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for `preprocessrefpanel`."""
 
@@ -88,61 +133,29 @@ def build_parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace) -> None:
     """Preprocess a reference panel into truncated per-block SVDs."""
 
-    # basic initialization
-    mhc = [25684587, 35455756]
     refpanel = gd.Dataset(args.bfile_chr)
     fs.makedir_for_file(args.svd_stem)
 
-    # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
-    ldblocks = ldblocks[~mhcblocks]
+    ldblocks = _load_ldblocks(args.ld_blocks)
     print(len(ldblocks), "loci after removing MHC")
-    print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
+    print_snps = _load_print_snps(args.print_snps)
     print(len(print_snps), "print snps")
 
     for c in args.chroms:
         print("loading chr", c, "of", args.chroms)
-        # get refpanel snp metadata for this chromosome
-        snps = refpanel.bim_df(c)
-        snps = pd.merge(snps, print_snps, on="SNP", how="left")
-        snps["printsnp"] = snps.printsnp.notnull()
-        print(
-            len(snps),
-            "snps in refpanel",
-            len(snps.columns),
-            "columns, including metadata",
-        )
+        snps = _prepare_chromosome_snps(refpanel, c, print_snps)
 
-        # iterate through ld blocks and process each one
         for ldblock, X, meta, _ in refpanel.block_data(ldblocks, c, meta=snps):
             if meta.printsnp.sum() == 0:
                 print("no print snps found in this block")
                 continue
 
-            # restrict X to have only potentially typed SNPs along one axis
-            mask = meta.printsnp.values
-            X_ = X[:, mask]
-
-            # compute the (right-hand) SVD of R
-            print("\tcomputing SVD of R_print")
-            U_, svs_ = _best_svd(X_)
-            k = np.argmax(np.cumsum(svs_) / svs_.sum() >= args.spectrum_percent / 100.0)
-            print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
-            np.savez(_svd_output_path(args.svd_stem, ldblock.name, "R"), U=U_[:, :k], svs=svs_[:k])
-
-            # compute the SVD of R2
-            print("\tcomputing R2_print")
-            R2 = X_.T.dot(X.dot(X.T)).dot(X_) / X.shape[0] ** 2
-            print("\tcomputing SVD of R2_print")
-            R2_U, R2_svs, _ = np.linalg.svd(R2)
-            k = np.argmax(np.cumsum(R2_svs) / R2_svs.sum() >= args.spectrum_percent / 100.0)
-            print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
-            np.savez(
-                _svd_output_path(args.svd_stem, ldblock.name, "R2"),
-                U=R2_U[:, :k],
-                svs=R2_svs[:k],
+            _save_block_svds(
+                X_print=X[:, meta.printsnp.values],
+                block_name=ldblock.name,
+                svd_stem=args.svd_stem,
+                spectrum_percent=args.spectrum_percent,
+                num_print_snps=int(meta.printsnp.sum()),
             )
 
         del snps
