@@ -12,16 +12,8 @@ from sldp import fs, memo
 
 COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}
 BASES = tuple(COMPLEMENT.keys())
-STRAND_AMBIGUOUS = {
-    "".join(x): x[0] == COMPLEMENT[x[1]]
-    for x in itertools.product(BASES, BASES)
-    if x[0] != x[1]
-}
-VALID_SNPS = {
-    x
-    for x in map("".join, itertools.product(BASES, BASES))
-    if x[0] != x[1] and not STRAND_AMBIGUOUS[x]
-}
+STRAND_AMBIGUOUS = {"".join(x): x[0] == COMPLEMENT[x[1]] for x in itertools.product(BASES, BASES) if x[0] != x[1]}
+VALID_SNPS = {x for x in map("".join, itertools.product(BASES, BASES)) if x[0] != x[1] and not STRAND_AMBIGUOUS[x]}
 MATCH_ALLELES = {
     x
     for x in map("".join, itertools.product(VALID_SNPS, VALID_SNPS))
@@ -30,12 +22,7 @@ MATCH_ALLELES = {
     or ((x[0] == x[3]) and (x[1] == x[2]))
     or ((x[0] == COMPLEMENT[x[3]]) and (x[1] == COMPLEMENT[x[2]]))
 }
-FLIP_ALLELES = {
-    x
-    for x in MATCH_ALLELES
-    if ((x[0] == x[3]) and (x[1] == x[2]))
-    or ((x[0] == COMPLEMENT[x[3]]) and (x[1] == COMPLEMENT[x[2]]))
-}
+FLIP_ALLELES = {x for x in MATCH_ALLELES if ((x[0] == x[3]) and (x[1] == x[2])) or ((x[0] == COMPLEMENT[x[3]]) and (x[1] == COMPLEMENT[x[2]]))}
 _METADATA_COLUMNS = {"SNP", "CHR", "CM", "BP", "A1", "A2"}
 
 
@@ -74,11 +61,7 @@ def smart_merge(
     x = x.reset_index(drop=True)
     if matching:
         return pd.concat(
-            [x]
-            + [
-                frame.reset_index(drop=True).drop(columns=key)
-                for frame in cleaned_frames
-            ],
+            [x] + [frame.reset_index(drop=True).drop(columns=key) for frame in cleaned_frames],
             axis=1,
         )
 
@@ -105,17 +88,13 @@ def reconciled_to(
     othercolnames = othercolnames or []
     result = smart_merge(
         ref,
-        df[[key, "A1", "A2", *colnames, *othercolnames]].rename(
-            columns={"A1": "A1_df", "A2": "A2_df"}
-        ),
+        df[[key, "A1", "A2", *colnames, *othercolnames]].rename(columns={"A1": "A1_df", "A2": "A2_df"}),
         how="left",
         key=key,
     )
     print(len(result), "snps after merging")
     if len(result) != len(ref):
-        print(
-            "WARNING: merged data frame is not the same length as reference data frame"
-        )
+        print("WARNING: merged data frame is not the same length as reference data frame")
         print("   check for duplicate snps in one of the two dataframes")
 
     missing = result.A1_df.isnull()
@@ -198,18 +177,14 @@ class Annotation:
     def annot_df(self, chrnum: int) -> pd.DataFrame:
         """Load a legacy `.annot.gz` dataframe."""
 
-        df = pd.read_csv(
-            self.annot_filename(chrnum), compression="gzip", header=0, sep="\t"
-        )
+        df = pd.read_csv(self.annot_filename(chrnum), compression="gzip", header=0, sep="\t")
         return df.astype(dtype={name: float for name in self.names(chrnum)})
 
     @memo.memoized
     def sannot_df(self, chrnum: int) -> pd.DataFrame:
         """Load a signed-annotation dataframe."""
 
-        df = pd.read_csv(
-            self.sannot_filename(chrnum), compression="gzip", header=0, sep="\t"
-        )
+        df = pd.read_csv(self.sannot_filename(chrnum), compression="gzip", header=0, sep="\t")
         return df.astype(dtype={name: float for name in self.names(chrnum)})
 
     @memo.memoized
@@ -218,14 +193,13 @@ class Annotation:
 
         return pd.read_csv(self.rv_filename(chrnum), sep="\t")
 
+    @memo.memoized
     def names(self, chrnum: int, RV: bool = False) -> list[str]:
         """Return annotation value column names, excluding SNP metadata columns."""
 
         filename = self.rv_filename(chrnum) if RV else self.sannot_filename(chrnum)
         temp = pd.read_csv(filename, nrows=1, sep=r"\s+")
-        return [
-            column for column in temp.columns.values if column not in _METADATA_COLUMNS
-        ]
+        return [column for column in temp.columns.values if column not in _METADATA_COLUMNS]
 
     def total_sqnorms(self, chrs: int | list[int] | range) -> np.ndarray:
         """Return per-annotation squared norms summed over chromosomes."""

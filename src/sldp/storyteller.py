@@ -22,11 +22,8 @@ def write(
 
     print("STORYTELLING for ", name, "z=", z)
     refpanel = gd.Dataset(args.bfile_reg_chr)
-    annot = [
-        ga.Annotation(a)
-        for a in args.sannot_chr
-        if name in ga.Annotation(a).names(22, RV=True)
-    ][0]
+    focal_annots = [ga.Annotation(a) for a in args.sannot_chr]
+    annot = [annot for annot in focal_annots if name in annot.names(22, True)][0]
 
     backgroundannots = [ga.Annotation(a) for a in args.background_sannot_chr]
     print("focal annotation columns:", annot.names(22, True))
@@ -62,9 +59,7 @@ def write(
         )
 
     print("reading focal annotation")
-    snps = pd.concat(
-        [snps, pd.concat([annot.RV_df(c)[name] for c in args.chroms], axis=0)], axis=1
-    )
+    snps = pd.concat([snps, pd.concat([annot.RV_df(c)[name] for c in args.chroms], axis=0)], axis=1)
 
     print("residualizing background out of focal")
     A = snps[background_names]
@@ -84,15 +79,7 @@ def write(
     windowsize = stride * windowsize_in_strides
 
     # find all starting points of windows containing GWAS-sig SNPs
-    starts = np.concatenate(
-        [
-            [
-                int(i / stride) * stride - k * stride
-                for k in range(0, windowsize_in_strides)
-            ]
-            for i in np.where(snps.significant)[0]
-        ]
-    )
+    starts = np.concatenate([[int(i / stride) * stride - k * stride for k in range(0, windowsize_in_strides)] for i in np.where(snps.significant)[0]])
     starts = np.array(sorted(list(set(starts))))
     # compute corresponding endpoints
     ends = starts + windowsize
@@ -113,9 +100,7 @@ def write(
                     i,
                     j,
                     np.max(snps.iloc[i:j].chi2),
-                    np.corrcoef(snps.iloc[i:j].Rv_resid, snps.iloc[i:j].ahat_resid)[
-                        0, 1
-                    ],
+                    np.corrcoef(snps.iloc[i:j].Rv_resid, snps.iloc[i:j].ahat_resid)[0, 1],
                 ]
                 for i, j in zip(starts, ends)
             ]
