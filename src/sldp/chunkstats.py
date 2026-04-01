@@ -190,7 +190,10 @@ def signflip(q: np.ndarray, T: int, printmem: bool = True, mode: str = "sum") ->
             null = cast(np.ndarray, null[:current])
             break
 
-    se = np.abs(score) / np.sqrt(st.chi2.isf(p, 1))
+    if p >= 1:
+        se = np.inf
+    else:
+        se = np.abs(score) / np.sqrt(st.chi2.isf(p, 1))
     del null
     gc.collect()
     if printmem:
