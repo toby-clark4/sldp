@@ -1,0 +1,8 @@
+{
+  "bfile-chr": "tests/fixtures/phase1_tiny/data/refpanel/toy_ref.",
+  "bfile-reg-chr": "tests/fixtures/phase1_tiny/data/refpanel_reg/toy_ref_reg.",
+  "svd-stem": "tests/fixtures/phase1_tiny/generated/svd/",
+  "print-snps": "tests/fixtures/phase1_tiny/data/print_snps.txt",
+  "ldscores-chr": "tests/fixtures/phase1_tiny/data/ldscores.",
+  "ld-blocks": "tests/fixtures/phase1_tiny/data/ld_blocks.bed"
+}

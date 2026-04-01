@@ -1,0 +1,7 @@
+rs1
+rs2
+rs4
+rs5
+rs7
+rs9
+rs10

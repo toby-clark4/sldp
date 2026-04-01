@@ -4,15 +4,17 @@ SLDP regression is a method for looking for a directional effect of a signed fun
 
 ## Installation
 
-First, make sure you have a python distribution installed that includes scientific computing packages like numpy/scipy/pandas as well as the package manager pip; we recommend [Anaconda](https://store.continuum.io/cshop/anaconda/).
+SLDP now targets Python 3.11+.
+
+First, make sure you have a Python distribution installed that includes scientific computing packages like numpy/scipy/pandas as well as the package manager pip. A Conda-based distribution is a good fit for the scientific stack.
 
 To install `sldp`, type the following command.
 ```  
 pip install sldp
 ```
-This should install both sldp as well as any required packages, such as [gprim](https://github.com/yakirr/gprim) and [ypy](https://github.com/yakirr/ypy).
+This installs `sldp` together with its current runtime dependencies.
 
-If you prefer to install `sldp` without pip, just clone this repository, together with [gprim](https://github.com/yakirr/gprim) and [ypy](https://github.com/yakirr/ypy), and add an entry for each into your python path.
+If you prefer to install `sldp` from a checkout, clone this repository and install it in your environment with `pip install -e .`.
 
 
 ## Getting started
@@ -24,6 +26,16 @@ sldp -h
 to print a list of all command-line options. If this command fails, there was a problem with the installation.
 
 Once this works, take a look at our [wiki](https://github.com/yakirr/sldp/wiki) for a short tutorial on how to use `sldp`.
+
+## Development
+
+This repository includes a tiny deterministic regression fixture under `tests/fixtures/phase1_tiny/` and a pytest suite that validates the refreshed code against a captured baseline implementation.
+
+To run the tests in the existing `sldp` Conda environment:
+
+```bash
+conda run -n sldp python -m pytest
+```
 
 
 ## Where can I get signed LD profiles?
