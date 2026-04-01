@@ -77,6 +77,7 @@ At this checkpoint:
 - fixed the main regression path bug where `se` could be used before assignment
 - fixed the `fastp` column-drop bug in `sldp.py`
 - fixed automatic preprocessing delegation to call execution functions instead of CLI `main()` entrypoints
+- restored an explicit main-command contract: `sldp` is analysis-only by default, with opt-in `--preprocess` support for creating only missing artifacts
 - improved the memoization helper to support keyword arguments safely
 
 ## Test Coverage Added

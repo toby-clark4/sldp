@@ -39,6 +39,8 @@ Captured on `2026-04-01`.
   - `sldp`
 - `storyteller.py` is optional and excluded from the first validation pass.
 - Numerical outputs should be compared using tolerances, not byte-for-byte equality.
+- Equivalence work should preserve intended baseline workflows, not known baseline bugs.
+- For `sldp`, the canonical comparison path is the explicit preprocessed workflow using `--pss-chr`, not implicit auto-preprocessing.
 
 ## Baseline Quirks Discovered During Phase 0/1
 
@@ -46,6 +48,7 @@ Captured on `2026-04-01`.
 - `sldp` expects `bfile_reg_chr` to contain only regression or printed SNPs, not the full reference panel.
 - `sldp -fastp` is broken in the installed baseline because it drops `pfast` and `zfast` instead of `p_fast` and `z_fast`.
 - `sldp` with no background annotations hits an `UnboundLocalError` in `chunkstats.residualize` in the installed baseline.
+- the refreshed repository adds an explicit `--preprocess` mode, but the default `sldp` path remains analysis-only so baseline-style comparisons still use preprocessed inputs
 - The canonical end-to-end baseline fixture therefore uses:
   - a regression-only `bfile_reg_chr`
   - a placeholder chromosome `22` annotation file for name discovery

@@ -33,6 +33,18 @@ Once this works, take a look at our [wiki](https://github.com/yakirr/sldp/wiki) 
 
 This repository includes a tiny deterministic regression fixture under `tests/fixtures/phase1_tiny/` and a pytest suite that validates the refreshed code against a captured baseline implementation.
 
+The refreshed `sldp` CLI now keeps the main command analysis-only by default. If processed phenotype or annotation artifacts are missing, `sldp` will stop with a clear error instead of creating files implicitly. Use `--preprocess` together with `--config` to build only the missing `.pss.gz`, `.RV.gz`, and `.info` artifacts before continuing.
+
+Typical workflows are:
+
+```bash
+# Baseline-style analysis using already processed inputs
+sldp --config path/to/config.json --outfile-stem out/toy --pss-chr data/sumstats/toy.KG3.95/ --sannot-chr data/annot/toy_annot.
+
+# Opt-in convenience mode that preprocesses only missing artifacts
+sldp --config path/to/config.json --outfile-stem out/toy --sumstats-stem data/sumstats/toy --sannot-chr data/annot/toy_annot. --preprocess
+```
+
 The current maintainability status and modernization summary are documented in `MAINTAINABILITY_CHECKPOINT.md`.
 
 To run the core validation checks in the existing `sldp` Conda environment:

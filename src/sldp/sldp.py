@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # optional arguments
     parser.add_argument(
+        "--preprocess",
+        default=False,
+        action="store_true",
+        help="Preprocess missing phenotype or annotation artifacts before running. Only missing outputs are created.",
+    )
+    parser.add_argument(
         "--verbose-thresh",
         default=0.0,
         type=float,
@@ -158,6 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # configurable arguments
+    parser.add_argument(
+        "--refpanel-name",
+        default="KG3.95",
+        help="Suffix used to locate or create processed phenotype directories when --sumstats-stem is used. Default is KG3.95.",
+    )
     parser.add_argument(
         "--config",
         default=None,
@@ -432,11 +443,108 @@ def _write_verbose_outputs(
     coeffs.to_csv(f"{fname}.coeffs", sep="\t", index=False)
 
 
-def run(args: argparse.Namespace) -> None:
-    """Execute SLDP regression from a parsed argument namespace."""
+def _processed_pss_path(args: argparse.Namespace) -> str:
+    """Return the processed phenotype directory used by the main regression."""
+
+    if args.pss_chr is not None:
+        return args.pss_chr
+    if args.sumstats_stem is None:
+        raise ValueError("Either --pss-chr or --sumstats-stem must be supplied")
+    return args.sumstats_stem + "." + args.refpanel_name + "/"
+
+
+def _missing_pheno_artifacts(args: argparse.Namespace) -> list[str]:
+    """List missing processed phenotype artifacts required for the requested run."""
+
+    pss_chr = _processed_pss_path(args)
+    missing = [f"{pss_chr}info"] if not os.path.exists(f"{pss_chr}info") else []
+    missing.extend(f"{pss_chr}{chrom}.pss.gz" for chrom in args.chroms if not os.path.exists(f"{pss_chr}{chrom}.pss.gz"))
+    return missing
+
+
+def _missing_annotation_artifacts(args: argparse.Namespace) -> dict[str, list[str]]:
+    """List missing processed annotation artifacts keyed by annotation stem."""
+
+    missing: dict[str, list[str]] = {}
+    for sannot in args.sannot_chr + args.background_sannot_chr:
+        missing_paths: list[str] = []
+        for chrom in args.chroms:
+            rv_path = sannot + str(chrom) + ".RV.gz"
+            info_path = sannot + str(chrom) + ".info"
+            if not os.path.exists(rv_path):
+                missing_paths.append(rv_path)
+            if not os.path.exists(info_path):
+                missing_paths.append(info_path)
+        if missing_paths:
+            missing[sannot] = missing_paths
+    return missing
+
+
+def _format_missing_message(header: str, missing: list[str], hint: str | None = None) -> str:
+    """Build a compact missing-artifact error message."""
+
+    shown = ", ".join(missing[:3])
+    suffix = "" if len(missing) <= 3 else f", and {len(missing) - 3} more"
+    message = f"{header}: {shown}{suffix}."
+    if hint is not None:
+        message += f" {hint}"
+    return message
+
+
+def _ensure_processed_inputs(args: argparse.Namespace) -> None:
+    """Validate processed inputs or optionally preprocess only missing artifacts."""
+
+    missing_pheno = _missing_pheno_artifacts(args)
+    missing_annots = _missing_annotation_artifacts(args)
+    if not missing_pheno and not missing_annots:
+        if args.pss_chr is None:
+            args.pss_chr = _processed_pss_path(args)
+            args.sumstats_stem = None
+        return
+
+    if not args.preprocess:
+        if missing_pheno:
+            raise ValueError(
+                _format_missing_message(
+                    "Missing processed phenotype artifacts",
+                    missing_pheno,
+                    "Rerun with --preprocess and --config to build only the missing files.",
+                )
+            )
+        first_annot = next(iter(missing_annots.values()))
+        raise ValueError(
+            _format_missing_message(
+                "Missing processed annotation artifacts",
+                first_annot,
+                "Rerun with --preprocess and --config to build only the missing files.",
+            )
+        )
+
+    if missing_pheno and args.pss_chr is not None and args.sumstats_stem is None:
+        raise ValueError(
+            _format_missing_message(
+                "Missing processed phenotype artifacts",
+                missing_pheno,
+                "Cannot rebuild them from --pss-chr alone. Rerun with --sumstats-stem, --preprocess, and --config.",
+            )
+        )
 
     preprocess_sumstats(args)
     preprocess_sannots(args)
+
+    remaining_pheno = _missing_pheno_artifacts(args)
+    remaining_annots = _missing_annotation_artifacts(args)
+    if remaining_pheno:
+        raise ValueError(_format_missing_message("Processed phenotype artifacts are still missing after preprocessing", remaining_pheno))
+    if remaining_annots:
+        first_annot = next(iter(remaining_annots.values()))
+        raise ValueError(_format_missing_message("Processed annotation artifacts are still missing after preprocessing", first_annot))
+
+
+def run(args: argparse.Namespace) -> None:
+    """Execute SLDP regression from a parsed argument namespace."""
+
+    _ensure_processed_inputs(args)
 
     print("initializing...")
 
