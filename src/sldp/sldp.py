@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import time
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,19 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 import sldp.storyteller as storyteller
 import sldp.weights as weights
+
+
+@dataclass(frozen=True)
+class AnnotationContext:
+    """Annotation metadata needed by the main SLDP regression workflow."""
+
+    annots: list[ga.Annotation]
+    background_annots: list[ga.Annotation]
+    marginal_name_groups: list[list[str]]
+    background_name_groups: list[list[str]]
+    marginal_names: list[str]
+    background_names: list[str]
+    marginal_infos: pd.DataFrame
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,68 +183,73 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(args: argparse.Namespace) -> None:
-    """Execute SLDP regression from a parsed argument namespace."""
+def _build_annotation_context(args: argparse.Namespace) -> AnnotationContext:
+    """Load annotation objects, names, and summary metadata for regression."""
 
-    preprocess_sumstats(args)
-    preprocess_sannots(args)
-
-    print("initializing...")
-
-    # basic initialization
-    mhc_bp = [25684587, 35455756]
-    refpanel = gd.Dataset(args.bfile_reg_chr)
-    pheno_name = args.pss_chr.split("/")[-2].replace(".KG3.95", "")
-    if args.seed is not None:
-        np.random.seed(args.seed)
-        print("random seed:", args.seed)
-
-    # read in names of background annotations and marginal annotations
     annots = [ga.Annotation(annot) for annot in args.sannot_chr]
     marginal_name_groups = [[name for name in annot.names(22, True) if ".R" in name] for annot in annots]
+    background_annots = [ga.Annotation(annot) for annot in args.background_sannot_chr]
+    background_name_groups = [[name for name in annot.names(22, True) if ".R" in name] for annot in background_annots]
     marginal_names = sum(marginal_name_groups, [])
-    marginal_infos = pd.concat([a.info_df(args.chroms) for a in annots], axis=0)
-    backgroundannots = [ga.Annotation(annot) for annot in args.background_sannot_chr]
-    background_name_groups = [[name for name in annot.names(22, True) if ".R" in name] for annot in backgroundannots]
     background_names = sum(background_name_groups, [])
-    print("background annotations:", background_names)
-    print("marginal annotations:", marginal_names)
+    marginal_infos = pd.concat([annot.info_df(args.chroms) for annot in annots], axis=0)
+
     if len(set(background_names) & set(marginal_names)) > 0:
-        raise ValueError("the background annotation names and the marginal annotation " + "names must be disjoint sets")
+        raise ValueError("the background annotation names and the marginal annotation names must be disjoint sets")
 
-    # read in ldblocks and remove ones that overlap mhc
-    ldblocks = pd.read_csv(
-        args.ld_blocks,
-        sep=r"\s+",
-        header=None,
-        names=["chr", "start", "end"],
+    return AnnotationContext(
+        annots=annots,
+        background_annots=background_annots,
+        marginal_name_groups=marginal_name_groups,
+        background_name_groups=background_name_groups,
+        marginal_names=marginal_names,
+        background_names=background_names,
+        marginal_infos=marginal_infos,
     )
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
-    ldblocks = ldblocks[~mhcblocks]
 
-    # read information about sumstats
-    sumstats_info = pd.read_csv(args.pss_chr + "info", sep="\t")
+
+def _load_ldblocks(path: str) -> pd.DataFrame:
+    """Load LD blocks and remove blocks overlapping the MHC region."""
+
+    mhc_bp = [25684587, 35455756]
+    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
+    return ldblocks[~mhcblocks]
+
+
+def _load_trait_info(pss_chr: str) -> tuple[str, float, float]:
+    """Load phenotype naming and heritability metadata from processed sumstats."""
+
+    pheno_name = pss_chr.split("/")[-2].replace(".KG3.95", "")
+    sumstats_info = pd.read_csv(pss_chr + "info", sep="\t")
     sigma2g = sumstats_info.loc[0].sigma2g
     h2g = sumstats_info.loc[0].h2g
+    return pheno_name, sigma2g, h2g
 
-    # read in sumstats and annots, and compute numerator and denominator of regression for
-    # each ldblock. These will later be processed and aggregated
-    numerators = dict()
-    denominators = dict()
+
+def _collect_block_statistics(
+    args: argparse.Namespace,
+    refpanel: gd.Dataset,
+    ldblocks: pd.DataFrame,
+    annotation_context: AnnotationContext,
+    sigma2g: float,
+) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray], pd.DataFrame]:
+    """Collect per-block numerator and denominator terms across chromosomes."""
+
+    numerators: dict[int, np.ndarray] = {}
+    denominators: dict[int, np.ndarray] = {}
     t0 = time.time()
+    combined_annotation_names = annotation_context.background_names + annotation_context.marginal_names
+    annotation_groups = list(zip(annotation_context.background_annots, annotation_context.background_name_groups)) + list(
+        zip(annotation_context.annots, annotation_context.marginal_name_groups)
+    )
+
     for c in args.chroms:
         print(time.time() - t0, ": loading chr", c, "of", args.chroms)
 
-        # get refpanel snp metadata
         snps = refpanel.bim_df(c)
-        print(
-            len(snps),
-            "snps in refpanel",
-            len(snps.columns),
-            "columns, including metadata",
-        )
+        print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
 
-        # read sumstats
         print("reading sumstats")
         ss = pd.read_csv(args.pss_chr + str(c) + ".pss.gz", sep="\t")
         print(np.isnan(ss[args.weights]).sum(), "sumstats nans out of", len(ss))
@@ -242,45 +261,39 @@ def run(args: argparse.Namespace) -> None:
             snps.typed &= ss.Winv_ahat_I**2 * ss.N > args.chi2_thresh
             print(snps.typed.sum(), "typed snps left")
 
-        # read annotations
         print("reading annotations")
-        for annot, mynames in list(zip(backgroundannots, background_name_groups)) + list(zip(annots, marginal_name_groups)):
+        for annot, mynames in annotation_groups:
             print(time.time() - t0, ": reading annot", annot.filestem())
             print("adding", mynames)
             snps = pd.concat([snps, annot.RV_df(c)[mynames]], axis=1)
             if (~np.isfinite(snps[mynames].values)).sum() > 0:
                 raise ValueError(
-                    "There should be no nans in the postprocessed annotation. " + "But there are " + str((~np.isfinite(snps[mynames].values)).sum())
+                    "There should be no nans in the postprocessed annotation. But there are " + str((~np.isfinite(snps[mynames].values)).sum())
                 )
 
-        # make sure things are in the order we think they are
-        if (np.array(background_names + marginal_names) != snps.columns.values[-len(background_names + marginal_names) :]).any():
+        if (np.array(combined_annotation_names) != snps.columns.values[-len(combined_annotation_names) :]).any():
             raise ValueError("Merged annotations are not in the right order")
 
-        # perform computations
-        for ldblock, _, meta, ind in refpanel.block_data(ldblocks, c, meta=snps, genos=False, verbose=0):
+        for ldblock, _, meta, _ in refpanel.block_data(ldblocks, c, meta=snps, genos=False, verbose=0):
             if meta.typed.sum() == 0 or not os.path.exists(args.svd_stem + str(ldblock.name) + ".R.npz"):
-                # no typed snps/hm3 snps in this block. set num snps to 0
                 ldblocks.loc[ldblock.name, "M_H"] = 0
                 continue
-            if (meta[background_names + marginal_names] == 0).values.all():
-                # annotations are all 0 in this block
+            if (meta[combined_annotation_names] == 0).values.all():
                 ldblocks.loc[ldblock.name, "M_H"] = 0
                 continue
-            # record the number of typed snps in this block, and start- and end- snp indices
-            ldblocks.loc[ldblock.name, "M_H"] = meta.typed.sum()
-            ldblocks.loc[ldblock.name, "snpind_begin"] = min(meta.index)  # for verbose
-            ldblocks.loc[ldblock.name, "snpind_end"] = max(meta.index) + 1  # for verbose
 
-            # load regression weights and prepare for regression computation
+            ldblocks.loc[ldblock.name, "M_H"] = meta.typed.sum()
+            ldblocks.loc[ldblock.name, "snpind_begin"] = min(meta.index)
+            ldblocks.loc[ldblock.name, "snpind_end"] = max(meta.index) + 1
+
             meta_t = meta[meta.typed.values]
             N = meta_t.N.mean()
-            if args.weights == "Winv_ahat_h" or args.weights == "Winv_ahat_hlN":
+            if args.weights in {"Winv_ahat_h", "Winv_ahat_hlN"}:
                 R = np.load(args.svd_stem + str(ldblock.name) + ".R.npz")
                 R2 = None
                 if len(R["U"]) != len(meta):
                     raise ValueError("regression wgts dimension must match regression snps")
-            elif args.weights == "Winv_ahat_h2" or args.weights == "Winv_ahat":
+            elif args.weights in {"Winv_ahat_h2", "Winv_ahat"}:
                 R = np.load(args.svd_stem + str(ldblock.name) + ".R.npz")
                 R2 = np.load(args.svd_stem + str(ldblock.name) + ".R2.npz")
                 if len(R["U"]) != len(meta) or len(R2["U"]) != len(meta):
@@ -289,20 +302,49 @@ def run(args: argparse.Namespace) -> None:
                 R = None
                 R2 = None
 
-            # multiply ahat by the weights
-            Winv_RV = weights.invert_weights(
+            weighted_rv = weights.invert_weights(
                 R,
                 R2,
                 sigma2g,
                 N,
-                meta[background_names + marginal_names].values,
+                meta[combined_annotation_names].values,
                 typed=meta.typed.values,
                 mode=args.weights,
             )
+            numerators[ldblock.name] = meta_t[combined_annotation_names].T.dot(meta_t.Winv_ahat).values / 1e6
+            denominators[ldblock.name] = meta_t[combined_annotation_names].T.dot(weighted_rv[meta.typed.values]).values / 1e6
 
-            numerators[ldblock.name] = (meta_t[background_names + marginal_names].T.dot(meta_t.Winv_ahat)).values / 1e6
-            denominators[ldblock.name] = meta_t[background_names + marginal_names].T.dot(Winv_RV[meta.typed.values]).values / 1e6
         memo.reset()
+
+    return numerators, denominators, ldblocks
+
+
+def run(args: argparse.Namespace) -> None:
+    """Execute SLDP regression from a parsed argument namespace."""
+
+    preprocess_sumstats(args)
+    preprocess_sannots(args)
+
+    print("initializing...")
+
+    refpanel = gd.Dataset(args.bfile_reg_chr)
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        print("random seed:", args.seed)
+
+    annotation_context = _build_annotation_context(args)
+    print("background annotations:", annotation_context.background_names)
+    print("marginal annotations:", annotation_context.marginal_names)
+
+    pheno_name, sigma2g, h2g = _load_trait_info(args.pss_chr)
+    ldblocks = _load_ldblocks(args.ld_blocks)
+    numerators, denominators, ldblocks = _collect_block_statistics(
+        args,
+        refpanel,
+        ldblocks,
+        annotation_context,
+        sigma2g,
+    )
 
     # get data for jackknifing
     print("jackknifing")
@@ -311,20 +353,20 @@ def run(args: argparse.Namespace) -> None:
     # compute final results
     global q, results
     results = pd.DataFrame()
-    for i, name in enumerate(marginal_names):
+    for i, name in enumerate(annotation_context.marginal_names):
         print(i, name)
         # metadata about v
-        sqnorm = marginal_infos.loc[name[:-2], "sqnorm"]
-        supp = marginal_infos.loc[name[:-2], "supp"]
+        sqnorm = annotation_context.marginal_infos.loc[name[:-2], "sqnorm"]
+        supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
 
         # estimate mu and initialize results row
         k = i
-        mu = cs.get_est(sum(chunk_nums), sum(chunk_denoms), k, len(background_names))
+        mu = cs.get_est(sum(chunk_nums), sum(chunk_denoms), k, len(annotation_context.background_names))
         newrow_results = {"pheno": pheno_name, "annot": name}
         results = pd.concat([results, pd.DataFrame([newrow_results])], ignore_index=True)
 
         # compute q
-        q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, len(background_names), k)
+        q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, len(annotation_context.background_names), k)
 
         # p-values
         if args.bothp or not args.fastp:
@@ -342,7 +384,7 @@ def run(args: argparse.Namespace) -> None:
             results.drop(["p_fast", "z_fast"], axis=1, inplace=True)
 
         # jackknife
-        se = cs.jackknife_se(mu, loo_nums, loo_denoms, k, len(background_names))
+        se = cs.jackknife_se(mu, loo_nums, loo_denoms, k, len(annotation_context.background_names))
         results.loc[i, "mu"] = mu
         results.loc[i, "se(mu)"] = se
 
@@ -354,7 +396,7 @@ def run(args: argparse.Namespace) -> None:
             chunkinfo["r"] = r
             chunkinfo.to_csv(fname + ".chunks", sep="\t", index=False)
             coeffs = pd.DataFrame()
-            coeffs["annot"] = background_names
+            coeffs["annot"] = annotation_context.background_names
             coeffs["mux"] = mux
             coeffs["muy"] = muy
             coeffs.to_csv(fname + ".coeffs", sep="\t", index=False)
@@ -365,7 +407,7 @@ def run(args: argparse.Namespace) -> None:
                 args.outfile_stem + "." + name + ".loci",
                 args,
                 name,
-                background_names,
+                annotation_context.background_names,
                 mux,
                 muy,
                 results.loc[i].z,
@@ -380,7 +422,7 @@ def run(args: argparse.Namespace) -> None:
             results.loc[i, "sqnorm"] = sqnorm
 
         # add estimates of rf, h2v, and other associated quantities
-        M = marginal_infos.loc[name[:-2], "M"]
+        M = annotation_context.marginal_infos.loc[name[:-2], "M"]
         results.loc[i, "h2g"] = h2g
         results.loc[i, "rf"] = mu * np.sqrt(sqnorm / h2g)
         results.loc[i, "h2v/h2g"] = results.loc[i].rf ** 2 - results.loc[i, "se(mu)"] ** 2 * sqnorm / (M * sigma2g)
