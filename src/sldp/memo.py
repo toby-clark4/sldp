@@ -14,9 +14,9 @@ def reset() -> None:
 
 
 class memoized:
-    """Cache the return value of a function by its positional arguments."""
+    """Cache the return value of a function by its positional and keyword arguments."""
 
-    def __init__(self, func):
+    def __init__(self, func: collections.abc.Callable[..., Any]) -> None:
         self.func = func
         self.cache: dict[Any, Any] = {}
         _all_memos.append(self)
@@ -27,7 +27,7 @@ class memoized:
 
         self.cache = {}
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         key = self._cache_key(args, kwargs)
         if key is None:
             return self.func(*args, **kwargs)
@@ -38,9 +38,10 @@ class memoized:
         self.cache[key] = value
         return value
 
-    def __get__(self, obj, objtype):
+    def __get__(self, obj: Any, objtype: type[Any] | None) -> collections.abc.Callable[..., Any]:
         """Support instance methods."""
 
+        del objtype
         return functools.partial(self.__call__, obj)
 
     @staticmethod

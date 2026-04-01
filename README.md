@@ -33,9 +33,13 @@ Once this works, take a look at our [wiki](https://github.com/yakirr/sldp/wiki) 
 
 This repository includes a tiny deterministic regression fixture under `tests/fixtures/phase1_tiny/` and a pytest suite that validates the refreshed code against a captured baseline implementation.
 
-To run the tests in the existing `sldp` Conda environment:
+The current maintainability status and modernization summary are documented in `MAINTAINABILITY_CHECKPOINT.md`.
+
+To run the core validation checks in the existing `sldp` Conda environment:
 
 ```bash
+conda run -n sldp python -m ruff check src tests
+conda run -n sldp python -m mypy src
 conda run -n sldp python -m pytest
 ```
 
