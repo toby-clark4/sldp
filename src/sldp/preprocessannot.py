@@ -25,14 +25,8 @@ def run(args: argparse.Namespace) -> None:
     annots = [ga.Annotation(annot) for annot in args.sannot_chr]
 
     # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(
-        args.ld_blocks, sep="\s+", header=None, names=["chr", "start", "end"]
-    )
-    mhcblocks = (
-        (ldblocks.chr == "chr6")
-        & (ldblocks.end > mhc_bp[0])
-        & (ldblocks.start < mhc_bp[1])
-    )
+    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
     ldblocks = ldblocks[~mhcblocks]
     print(len(ldblocks), "loci after removing MHC")
     print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
@@ -60,20 +54,16 @@ def run(args: argparse.Namespace) -> None:
             namesR = [n + ".R" for n in names]  # names of results
             a = annot.sannot_df(c)
             if "SNP" in a.columns:
-                print(
-                    "not a thinannot => doing full reconciliation of snps and allele coding"
-                )
+                print("not a thinannot => doing full reconciliation of snps and allele coding")
                 snps = ga.reconciled_to(snps, a, names, missing_val=0)
             else:
-                print(
-                    "detected thinannot, so assuming that annotation is synched to refpanel"
-                )
+                print("detected thinannot, so assuming that annotation is synched to refpanel")
                 snps = pd.concat([snps, a[names]], axis=1)
 
             # add information on which snps to print
             print("merging in print_snps")
             snps = pd.merge(snps, print_snps, how="left", on="SNP")
-            snps["printsnp"] = snps.printsnp.fillna(False).astype(bool)
+            snps["printsnp"] = snps.printsnp.notnull()
 
             # put on per-normalized-genotype scale
             if args.alpha != -1:
@@ -95,9 +85,7 @@ def run(args: argparse.Namespace) -> None:
 
             # compute simple statistics about annotation
             print("computing basic statistics and writing")
-            info = pd.DataFrame(
-                columns=["M", "M_5_50", "sqnorm", "sqnorm_5_50", "supp", "supp_5_50"]
-            )
+            info = pd.DataFrame(columns=["M", "M_5_50", "sqnorm", "sqnorm_5_50", "supp", "supp_5_50"])
             info["name"] = names
             info.set_index("name", inplace=True)
             info["M"] = len(snps)
@@ -122,16 +110,12 @@ def run(args: argparse.Namespace) -> None:
                     mask = meta.printsnp.values
                     V = meta[names].values
                     XV = X.dot(V)
-                    snps.loc[ind[mask], namesR] = (
-                        X[:, mask].T.dot(XV[:, -len(names) :]) / X.shape[0]
-                    )
+                    snps.loc[ind[mask], namesR] = X[:, mask].T.dot(XV[:, -len(names) :]) / X.shape[0]
 
             # write
             print("writing output")
             with gzip.open(annot.RV_filename(c), "wt") as f:
-                snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(
-                    f, index=False, sep="\t"
-                )
+                snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(f, index=False, sep="\t")
 
             del snps
             memo.reset()
@@ -155,8 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sannot-chr",
         nargs="+",
         required=True,
-        help="Multiple (space-delimited) paths to sannot.gz files, not including "
-        + "chromosome",
+        help="Multiple (space-delimited) paths to sannot.gz files, not including " + "chromosome",
     )
 
     # optional arguments
@@ -187,20 +170,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bfile-chr",
         default=None,
-        help="Path to plink bfile of reference panel to use, not including "
-        + "chromosome number. If not supplied, will be read from config file.",
+        help="Path to plink bfile of reference panel to use, not including " + "chromosome number. If not supplied, will be read from config file.",
     )
     parser.add_argument(
         "--print-snps",
         default=None,
-        help="Path to set of potentially typed SNPs. If not supplied, will be read "
-        + "from config file.",
+        help="Path to set of potentially typed SNPs. If not supplied, will be read " + "from config file.",
     )
     parser.add_argument(
         "--ld-blocks",
         default=None,
-        help="Path to UCSC bed file containing one bed interval per LD block. If "
-        + "not supplied, will be read from config file.",
+        help="Path to UCSC bed file containing one bed interval per LD block. If " + "not supplied, will be read from config file.",
     )
 
     return parser

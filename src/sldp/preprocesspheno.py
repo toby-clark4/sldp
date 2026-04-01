@@ -24,9 +24,7 @@ def run(args: argparse.Namespace) -> None:
 
     # read in refpanel, ld blocks, and svd snps
     refpanel = gd.Dataset(args.bfile_chr)
-    ldblocks = pd.read_csv(
-        args.ld_blocks, sep="\s+", header=None, names=["chr", "start", "end"]
-    )
+    ldblocks = pd.read_csv(args.ld_blocks, sep=r"\s+", header=None, names=["chr", "start", "end"])
     print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
     print_snps["printsnp"] = True
     print(len(print_snps), "svd snps")
@@ -35,11 +33,7 @@ def run(args: argparse.Namespace) -> None:
     print("reading sumstats", args.sumstats_stem)
     ss = pd.read_csv(args.sumstats_stem + ".sumstats.gz", sep="\t")
     ss = ss[ss.Z.notnull() & ss.N.notnull()]
-    print(
-        "{} snps, {}-{} individuals (avg: {})".format(
-            len(ss), np.min(ss.N), np.max(ss.N), np.mean(ss.N)
-        )
-    )
+    print("{} snps, {}-{} individuals (avg: {})".format(len(ss), np.min(ss.N), np.max(ss.N), np.mean(ss.N)))
 
     # filter to monoallelic SNPs only (remove indels and multi-allelic variants)
     ss["is_monoallelic"] = (ss.A1.str.len() == 1) & (ss.A2.str.len() == 1)
@@ -58,29 +52,17 @@ def run(args: argparse.Namespace) -> None:
 
     # read ld scores
     print("reading in ld scores")
-    ld = pd.concat(
-        [
-            pd.read_csv(args.ldscores_chr + str(c) + ".l2.ldscore.gz", sep="\s+")
-            for c in range(1, 23)
-        ],
-        axis=0,
-    )
+    ld_frames = [pd.read_csv(args.ldscores_chr + str(c) + ".l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
+    ld = pd.concat([frame for frame in ld_frames if not frame.empty], axis=0)
 
     def read_m_file(path: str) -> int:
         with open(path) as handle:
             return int(next(handle))
 
     if args.no_M_5_50:
-        M = sum(
-            [read_m_file(args.ldscores_chr + str(c) + ".l2.M") for c in range(1, 23)]
-        )
+        M = sum([read_m_file(args.ldscores_chr + str(c) + ".l2.M") for c in range(1, 23)])
     else:
-        M = sum(
-            [
-                read_m_file(args.ldscores_chr + str(c) + ".l2.M_5_50")
-                for c in range(1, 23)
-            ]
-        )
+        M = sum([read_m_file(args.ldscores_chr + str(c) + ".l2.M_5_50") for c in range(1, 23)])
     print(len(ld), "snps with ld scores")
     ssld = pd.merge(ss, ld, on="SNP", how="left")
     print(len(ssld), "hm3 snps with sumstats after merge.")
@@ -135,7 +117,7 @@ def run(args: argparse.Namespace) -> None:
         # get refpanel snp metadata for this chromosome
         snps = refpanel.bim_df(c)
         snps = pd.merge(snps, print_snps, on="SNP", how="left")
-        snps["printsnp"] = snps.printsnp.fillna(False).astype(bool)
+        snps["printsnp"] = snps.printsnp.notnull()
         print(
             len(snps),
             "snps in refpanel",
@@ -145,9 +127,7 @@ def run(args: argparse.Namespace) -> None:
 
         # merge annot and sumstats
         print("reconciling")
-        snps = ga.reconciled_to(
-            snps, ss, ["Z"], othercolnames=["N"], missing_val=np.nan
-        )
+        snps = ga.reconciled_to(snps, ss, ["Z"], othercolnames=["N"], missing_val=np.nan)
         snps["typed"] = snps.Z.notnull()
         snps["ahat"] = snps.Z / np.sqrt(snps.N)
 
@@ -161,9 +141,7 @@ def run(args: argparse.Namespace) -> None:
 
         # restrict to ld blocks in this chr and process them in chunks
         for ldblock, X, meta, ind in refpanel.block_data(ldblocks, c, meta=snps):
-            if meta.printsnp.sum() == 0 or not os.path.exists(
-                args.svd_stem + str(ldblock.name) + ".R.npz"
-            ):
+            if meta.printsnp.sum() == 0 or not os.path.exists(args.svd_stem + str(ldblock.name) + ".R.npz"):
                 print("no svd snps found in this block")
                 continue
             print(meta.printsnp.sum(), "svd snps", meta.typed.sum(), "typed snps")
@@ -177,18 +155,12 @@ def run(args: argparse.Namespace) -> None:
             meta_svd = meta[meta.printsnp.values]
 
             # multiply ahat by the weights
-            x_I = snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(
-                R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_I"
-            )
-            x_h = snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(
-                R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_h"
-            )
+            x_I = snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_I")
+            x_h = snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(R, R2, sigma2g, N, meta_svd.ahat.values, mode="Winv_ahat_h")
 
         print("writing processed sumstats")
         with gzip.open("{}/{}.pss.gz".format(dirname, c), "w") as f:
-            snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(
-                f, index=False, sep="\t"
-            )
+            snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(f, index=False, sep="\t")
 
         del snps
         memo.reset()
@@ -253,8 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bfile-chr",
         default=None,
-        help="Path to plink bfile of reference panel to use, not including "
-        + "chromosome number. If not supplied, will be read from config file.",
+        help="Path to plink bfile of reference panel to use, not including " + "chromosome number. If not supplied, will be read from config file.",
     )
     parser.add_argument(
         "--svd-stem",
@@ -266,8 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--print-snps",
         default=None,
-        help="Path to set of potentially typed SNPs. If not supplied, will be read "
-        + "from config file.",
+        help="Path to set of potentially typed SNPs. If not supplied, will be read " + "from config file.",
     )
     parser.add_argument(
         "--ldscores-chr",
@@ -279,8 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ld-blocks",
         default=None,
-        help="Path to UCSC bed file containing one bed interval per LD block. If "
-        + "not supplied, will be read from config file.",
+        help="Path to UCSC bed file containing one bed interval per LD block. If " + "not supplied, will be read from config file.",
     )
 
     return parser

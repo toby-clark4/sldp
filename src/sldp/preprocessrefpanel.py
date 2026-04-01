@@ -44,26 +44,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--svd-stem",
         default=None,
-        help="Path to directory in which output files will be stored. "
-        + "If not supplied, will be read from config file.",
+        help="Path to directory in which output files will be stored. " + "If not supplied, will be read from config file.",
     )
     parser.add_argument(
         "--bfile-chr",
         default=None,
-        help="Path to plink bfile of reference panel to use, not including "
-        + "chromosome number. If not supplied, will be read from config file.",
+        help="Path to plink bfile of reference panel to use, not including " + "chromosome number. If not supplied, will be read from config file.",
     )
     parser.add_argument(
         "--print-snps",
         default=None,
-        help="Path to set of potentially typed SNPs. If not supplied, will be read "
-        + "from config file.",
+        help="Path to set of potentially typed SNPs. If not supplied, will be read " + "from config file.",
     )
     parser.add_argument(
         "--ld-blocks",
         default=None,
-        help="Path to UCSC bed file containing one bed interval per LD block. If "
-        + "not supplied, will be read from config file.",
+        help="Path to UCSC bed file containing one bed interval per LD block. If " + "not supplied, will be read from config file.",
     )
 
     return parser
@@ -78,12 +74,8 @@ def run(args: argparse.Namespace) -> None:
     fs.makedir_for_file(args.svd_stem)
 
     # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(
-        args.ld_blocks, sep="\s+", header=None, names=["chr", "start", "end"]
-    )
-    mhcblocks = (
-        (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
-    )
+    ldblocks = pd.read_csv(args.ld_blocks, sep="\s+", header=None, names=["chr", "start", "end"])
+    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
     ldblocks = ldblocks[~mhcblocks]
     print(len(ldblocks), "loci after removing MHC")
     print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
@@ -95,7 +87,7 @@ def run(args: argparse.Namespace) -> None:
         # get refpanel snp metadata for this chromosome
         snps = refpanel.bim_df(c)
         snps = pd.merge(snps, print_snps, on="SNP", how="left")
-        snps["printsnp"] = snps.printsnp.fillna(False).astype(bool)
+        snps["printsnp"] = snps.printsnp.notnull()
         print(
             len(snps),
             "snps in refpanel",
@@ -128,18 +120,14 @@ def run(args: argparse.Namespace) -> None:
             U_, svs_ = bestsvd(X_)
             k = np.argmax(np.cumsum(svs_) / svs_.sum() >= args.spectrum_percent / 100.0)
             print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
-            np.savez(
-                "{}{}.R".format(args.svd_stem, ldblock.name), U=U_[:, :k], svs=svs_[:k]
-            )
+            np.savez("{}{}.R".format(args.svd_stem, ldblock.name), U=U_[:, :k], svs=svs_[:k])
 
             # compute the SVD of R2
             print("\tcomputing R2_print")
             R2 = X_.T.dot(X.dot(X.T)).dot(X_) / X.shape[0] ** 2
             print("\tcomputing SVD of R2_print")
             R2_U, R2_svs, _ = np.linalg.svd(R2)
-            k = np.argmax(
-                np.cumsum(R2_svs) / R2_svs.sum() >= args.spectrum_percent / 100.0
-            )
+            k = np.argmax(np.cumsum(R2_svs) / R2_svs.sum() >= args.spectrum_percent / 100.0)
             print("\treduced rank of", k, "out of", meta.printsnp.sum(), "printed snps")
             np.savez(
                 "{}{}.R2".format(args.svd_stem, ldblock.name),
