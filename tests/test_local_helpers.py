@@ -33,6 +33,18 @@ class TestMemoHelpers:
         assert square(3) == 9
         assert calls == [3, 3]
 
+    def test_memoized_supports_keyword_arguments(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        @memo.memoized
+        def add(x: int, y: int = 0) -> int:
+            calls.append((x, y))
+            return x + y
+
+        assert add(2, y=3) == 5
+        assert add(2, y=3) == 5
+        assert calls == [(2, 3)]
+
 
 class TestPrettyHelpers:
     def test_print_namespace_omits_private_attributes(self, capsys) -> None:
