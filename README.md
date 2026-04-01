@@ -16,6 +16,8 @@ This installs `sldp` together with its current runtime dependencies.
 
 If you prefer to install `sldp` from a checkout, clone this repository and install it in your environment with `pip install -e .`.
 
+For development, install the optional tooling extras with `pip install -e .[dev]`.
+
 
 ## Getting started
 
