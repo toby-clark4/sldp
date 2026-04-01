@@ -12,8 +12,8 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 
 
-def main() -> None:
-    """Run the `preprocessrefpanel` command-line entry point."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for `preprocessrefpanel`."""
 
     parser = argparse.ArgumentParser()
     # optional arguments
@@ -66,10 +66,16 @@ def main() -> None:
         + "not supplied, will be read from config file.",
     )
 
+    return parser
+
+
+def main() -> None:
+    """Run the `preprocessrefpanel` command-line entry point."""
+
     print("=====")
     print(" ".join(sys.argv))
     print("=====")
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     config.add_default_params(args)
     pretty.print_namespace(args)
     print("=====")
