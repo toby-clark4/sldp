@@ -477,13 +477,14 @@ def preprocess_sumstats(args):
             print("Using config file", args.config, "and default options")
 
             # run the command
-            import sldp.preprocesspheno, copy
+            import copy
+            import sldp.preprocesspheno
 
             args_ = copy.copy(args)
             args_.no_M_5_50 = False
             args_.set_h2g = None
             args_.chroms = unprocessed_chroms
-            sldp.preprocesspheno.main(args_)
+            sldp.preprocesspheno.run(args_)
 
         # modify args to reflect existing of pss-chr files
         args.pss_chr = args.sumstats_stem + "." + args.refpanel_name + "/"
@@ -516,12 +517,14 @@ def preprocess_sannots(args):
             print("Using config file", args.config, "and default options")
 
             # run preprocessing command
-            import sldp.preprocessannot, copy
+            import copy
+            import sldp.preprocessannot
 
             args_ = copy.copy(args)
             args_.alpha = -1
+            args_.sannot_chr = [sannot]
             args_.chroms = unprocessed_chroms
-            sldp.preprocessannot.main(args_)
+            sldp.preprocessannot.run(args_)
 
             print("== finished preprocessing annotation", sannot)
 

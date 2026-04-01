@@ -14,7 +14,7 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 
 
-def do(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Preprocess signed annotations into LD-profile tables by chromosome."""
 
     print("initializing...")
@@ -140,6 +140,12 @@ def do(args: argparse.Namespace) -> None:
     print("done")
 
 
+def do(args: argparse.Namespace) -> None:
+    """Backward-compatible alias for running annotation preprocessing."""
+
+    run(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for `preprocessannot`."""
 
@@ -211,7 +217,7 @@ def main() -> None:
     pretty.print_namespace(args)
     print("=====")
 
-    do(args)
+    run(args)
 
 
 if __name__ == "__main__":

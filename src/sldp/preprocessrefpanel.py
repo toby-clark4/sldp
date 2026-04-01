@@ -69,16 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    """Run the `preprocessrefpanel` command-line entry point."""
-
-    print("=====")
-    print(" ".join(sys.argv))
-    print("=====")
-    args = build_parser().parse_args()
-    config.add_default_params(args)
-    pretty.print_namespace(args)
-    print("=====")
+def run(args: argparse.Namespace) -> None:
+    """Preprocess a reference panel into truncated per-block SVDs."""
 
     # basic initialization
     mhc = [25684587, 35455756]
@@ -159,6 +151,20 @@ def main() -> None:
         memo.reset()
         gc.collect()
     print("done")
+
+
+def main() -> None:
+    """Run the `preprocessrefpanel` command-line entry point."""
+
+    print("=====")
+    print(" ".join(sys.argv))
+    print("=====")
+    args = build_parser().parse_args()
+    config.add_default_params(args)
+    pretty.print_namespace(args)
+    print("=====")
+
+    run(args)
 
 
 if __name__ == "__main__":

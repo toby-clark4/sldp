@@ -17,7 +17,7 @@ import sldp.pretty as pretty
 import sldp.weights as weights
 
 
-def do(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Preprocess GWAS summary statistics into weighted per-block inputs."""
 
     print("initializing...")
@@ -197,6 +197,12 @@ def do(args: argparse.Namespace) -> None:
     print("done")
 
 
+def do(args: argparse.Namespace) -> None:
+    """Backward-compatible alias for running phenotype preprocessing."""
+
+    run(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for `preprocesspheno`."""
 
@@ -291,7 +297,7 @@ def main() -> None:
     pretty.print_namespace(args)
     print("=====")
 
-    do(args)
+    run(args)
 
 
 if __name__ == "__main__":
