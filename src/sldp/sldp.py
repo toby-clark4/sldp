@@ -1,12 +1,25 @@
 import argparse
+import os
 import sys
+import time
 
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+
+import sldp.annotation as ga
+import sldp.chunkstats as cs
 import sldp.config as config
+import sldp.dataset as gd
 import sldp.memo as memo
 import sldp.pretty as pretty
+import sldp.storyteller as storyteller
+import sldp.weights as weights
 
 
-def main():
+def main() -> None:
+    """Run the main SLDP regression command-line entry point."""
+
     parser = argparse.ArgumentParser()
     # required arguments
     parser.add_argument(
@@ -174,15 +187,6 @@ def main():
     preprocess_sannots(args)
 
     print("initializing...")
-    import os, time
-    import numpy as np
-    import pandas as pd
-    import scipy.stats as st
-    import sldp.annotation as ga
-    import sldp.weights as weights
-    import sldp.chunkstats as cs
-    import sldp.dataset as gd
-    import sldp.storyteller as storyteller
 
     # basic initialization
     mhc_bp = [25684587, 35455756]

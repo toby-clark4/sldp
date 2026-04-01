@@ -1,23 +1,26 @@
 import argparse
+import gc
+import gzip
+import os
 import sys
+import time
 
+import numpy as np
+import pandas as pd
+
+import sldp.annotation as ga
 import sldp.config as config
+import sldp.dataset as gd
 import sldp.fs as fs
 import sldp.memo as memo
 import sldp.pretty as pretty
+import sldp.weights as weights
 
 
-def do(args):
+def do(args: argparse.Namespace) -> None:
+    """Preprocess GWAS summary statistics into weighted per-block inputs."""
+
     print("initializing...")
-    import gc
-    import gzip
-    import os
-    import time
-    import numpy as np
-    import pandas as pd
-    import sldp.annotation as ga
-    import sldp.dataset as gd
-    import sldp.weights as weights
 
     # read in refpanel, ld blocks, and svd snps
     refpanel = gd.Dataset(args.bfile_chr)
@@ -63,7 +66,7 @@ def do(args):
         axis=0,
     )
 
-    def read_m_file(path):
+    def read_m_file(path: str) -> int:
         with open(path) as handle:
             return int(next(handle))
 
@@ -83,7 +86,7 @@ def do(args):
     print(len(ssld), "hm3 snps with sumstats after merge.")
 
     # estimate heritability using aggregate estimator
-    def esth2g(ssld):
+    def esth2g(ssld: pd.DataFrame) -> tuple[float, float, float, float]:
         ssld_valid = ssld[ssld.L2.notnull()]
         if len(ssld_valid) == 0:
             raise ValueError("No SNPs with valid LD scores found")
@@ -194,7 +197,9 @@ def do(args):
     print("done")
 
 
-def main():
+def main() -> None:
+    """Run the `preprocesspheno` command-line entry point."""
+
     parser = argparse.ArgumentParser()
     # required arguments
     parser.add_argument(

@@ -8,7 +8,18 @@ import sldp.fs as fs
 
 
 # find windows with genome-wide significant SNPs that are consistent with the global signal
-def write(folder, args, name, background_names, mux, muy, z, corr_thresh=0.8):
+def write(
+    folder: str,
+    args,
+    name: str,
+    background_names: list[str],
+    mux: np.ndarray,
+    muy: np.ndarray,
+    z: float,
+    corr_thresh: float = 0.8,
+) -> None:
+    """Write local locus plots for strong genome-wide directional associations."""
+
     print("STORYTELLING for ", name, "z=", z)
     refpanel = gd.Dataset(args.bfile_reg_chr)
     annot = [

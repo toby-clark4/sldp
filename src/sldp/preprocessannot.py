@@ -1,20 +1,23 @@
 import argparse
+import gc
+import gzip
 import sys
+import time
 
+import numpy as np
+import pandas as pd
+
+import sldp.annotation as ga
 import sldp.config as config
+import sldp.dataset as gd
 import sldp.memo as memo
 import sldp.pretty as pretty
 
 
-def do(args):
+def do(args: argparse.Namespace) -> None:
+    """Preprocess signed annotations into LD-profile tables by chromosome."""
+
     print("initializing...")
-    import gc
-    import gzip
-    import time
-    import numpy as np
-    import pandas as pd
-    import sldp.annotation as ga
-    import sldp.dataset as gd
 
     # basic initialization
     mhc_bp = [25684587, 35455756]
@@ -137,7 +140,9 @@ def do(args):
     print("done")
 
 
-def main():
+def main() -> None:
+    """Run the `preprocessannot` command-line entry point."""
+
     parser = argparse.ArgumentParser()
     # required arguments
     parser.add_argument(

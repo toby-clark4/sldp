@@ -4,6 +4,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+
 import sldp.config as config
 import sldp.dataset as gd
 import sldp.fs as fs
@@ -11,7 +12,9 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 
 
-def main():
+def main() -> None:
+    """Run the `preprocessrefpanel` command-line entry point."""
+
     parser = argparse.ArgumentParser()
     # optional arguments
     parser.add_argument(
