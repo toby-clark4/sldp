@@ -18,59 +18,176 @@ import sldp.pretty as pretty
 import sldp.weights as weights
 
 
+def _load_ldblocks(path: str) -> pd.DataFrame:
+    """Load chromosome LD blocks."""
+
+    return pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
+
+
+def _load_print_snps(path: str) -> pd.DataFrame:
+    """Load the SNP set used for SVD and processed outputs."""
+
+    print_snps = pd.read_csv(path, header=None, names=["SNP"])
+    print_snps["printsnp"] = True
+    return print_snps
+
+
+def _read_sumstats(sumstats_stem: str) -> pd.DataFrame:
+    """Load summary statistics and apply the base missing-value filter."""
+
+    print("reading sumstats", sumstats_stem)
+    sumstats = pd.read_csv(f"{sumstats_stem}.sumstats.gz", sep="\t")
+    sumstats = sumstats[sumstats.Z.notnull() & sumstats.N.notnull()]
+    print(
+        "{} snps, {}-{} individuals (avg: {})".format(
+            len(sumstats),
+            np.min(sumstats.N),
+            np.max(sumstats.N),
+            np.mean(sumstats.N),
+        )
+    )
+    return sumstats
+
+
+def _filter_sumstats(sumstats: pd.DataFrame, print_snps: pd.DataFrame) -> pd.DataFrame:
+    """Drop unsupported variants and restrict to typed SNPs."""
+
+    sumstats["is_monoallelic"] = (sumstats.A1.str.len() == 1) & (sumstats.A2.str.len() == 1)
+    n_removed = (~sumstats.is_monoallelic).sum()
+    sumstats = sumstats[sumstats.is_monoallelic].drop(columns=["is_monoallelic"])
+    print("{} non-monoallelic variants removed".format(n_removed))
+
+    n_dups = sumstats.SNP.duplicated().sum()
+    if n_dups > 0:
+        sumstats = sumstats[~sumstats.SNP.duplicated(keep="first")]
+        print("{} duplicate SNP IDs removed".format(n_dups))
+
+    sumstats = pd.merge(sumstats, print_snps[["SNP"]], on="SNP", how="inner")
+    print(len(sumstats), "snps typed")
+    return sumstats
+
+
+def _read_ld_scores(ldscores_chr: str) -> tuple[pd.DataFrame, callable]:
+    """Load LD score tables and return an M-file reader helper."""
+
+    print("reading in ld scores")
+    ld_frames = [pd.read_csv(f"{ldscores_chr}{c}.l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
+    ld_scores = pd.concat([frame for frame in ld_frames if not frame.empty], axis=0)
+
+    def read_m_file(path: str | Path) -> int:
+        with Path(path).open() as handle:
+            return int(next(handle))
+
+    return ld_scores, read_m_file
+
+
+def _estimate_h2g(ssld: pd.DataFrame, M: int) -> tuple[float, float, float, float]:
+    """Estimate trait heritability from LD scores and Z-scores."""
+
+    ssld_valid = ssld[ssld.L2.notnull()]
+    if len(ssld_valid) == 0:
+        raise ValueError("No SNPs with valid LD scores found")
+    meanchi2 = (ssld_valid.Z**2).mean()
+    meanNl2 = (ssld_valid.N * ssld_valid.L2).mean()
+    if meanNl2 == 0 or np.isnan(meanNl2):
+        raise ValueError("Mean N*L2 is zero or NaN - cannot estimate heritability")
+    sigma2g = (meanchi2 - 1) / meanNl2
+    h2g = sigma2g * M
+    K = M / meanNl2
+    return h2g, sigma2g, meanchi2, K
+
+
+def _write_info_file(dirname: Path, sumstats_stem: str, h2g: float, sigma2g: float, sumstats: pd.DataFrame) -> None:
+    """Write trait-level metadata for processed phenotype inputs."""
+
+    print("writing info file")
+    info = pd.DataFrame(
+        [
+            {
+                "pheno": sumstats_stem.split("/")[-1],
+                "h2g": h2g,
+                "sigma2g": sigma2g,
+                "Nbar": sumstats.N.mean(),
+            }
+        ]
+    )
+    info.to_csv(dirname / "info", sep="\t", index=False)
+
+
+def _process_chromosome(
+    refpanel: gd.Dataset,
+    ldblocks: pd.DataFrame,
+    chrom: int,
+    print_snps: pd.DataFrame,
+    sumstats: pd.DataFrame,
+    svd_stem: str,
+    sigma2g: float,
+) -> pd.DataFrame:
+    """Process one chromosome into weighted per-SNP phenotype inputs."""
+
+    snps = refpanel.bim_df(chrom)
+    snps = pd.merge(snps, print_snps, on="SNP", how="left")
+    snps["printsnp"] = snps.printsnp.notnull()
+    print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
+
+    print("reconciling")
+    snps = ga.reconciled_to(snps, sumstats, ["Z"], othercolnames=["N"], missing_val=np.nan)
+    snps["typed"] = snps.Z.notnull()
+    snps["ahat"] = snps.Z / np.sqrt(snps.N)
+    snps["Winv_ahat_I"] = np.nan
+    snps["R_Winv_ahat_I"] = np.nan
+    snps["Winv_ahat_h"] = np.nan
+    snps["R_Winv_ahat_h"] = np.nan
+
+    for ldblock, _, meta, ind in refpanel.block_data(ldblocks, chrom, meta=snps):
+        svd_r_path = Path(f"{svd_stem}{ldblock.name}.R.npz")
+        svd_r2_path = Path(f"{svd_stem}{ldblock.name}.R2.npz")
+        if meta.printsnp.sum() == 0 or not svd_r_path.exists():
+            print("no svd snps found in this block")
+            continue
+        print(meta.printsnp.sum(), "svd snps", meta.typed.sum(), "typed snps")
+        if meta.typed.sum() == 0:
+            print("no typed snps found in this block")
+            snps.loc[ind, ["R_Winv_ahat_I", "R_Winv_ahat_h"]] = 0
+            continue
+
+        r = np.load(svd_r_path)
+        r2 = np.load(svd_r2_path)
+        sample_size = meta[meta.typed.values].N.mean()
+        meta_svd = meta[meta.printsnp.values]
+        snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(
+            r,
+            r2,
+            sigma2g,
+            sample_size,
+            meta_svd.ahat.values,
+            mode="Winv_ahat_I",
+        )
+        snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(
+            r,
+            r2,
+            sigma2g,
+            sample_size,
+            meta_svd.ahat.values,
+            mode="Winv_ahat_h",
+        )
+
+    return snps
+
+
 def run(args: argparse.Namespace) -> None:
     """Preprocess GWAS summary statistics into weighted per-block inputs."""
 
     print("initializing...")
 
-    # read in refpanel, ld blocks, and svd snps
     refpanel = gd.Dataset(args.bfile_chr)
-    ldblocks = pd.read_csv(
-        args.ld_blocks,
-        sep=r"\s+",
-        header=None,
-        names=["chr", "start", "end"],
-    )
-    print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
+    ldblocks = _load_ldblocks(args.ld_blocks)
+    print_snps = _load_print_snps(args.print_snps)
     print(len(print_snps), "svd snps")
 
-    # read sumstats
-    print("reading sumstats", args.sumstats_stem)
-    ss = pd.read_csv(f"{args.sumstats_stem}.sumstats.gz", sep="\t")
-    ss = ss[ss.Z.notnull() & ss.N.notnull()]
-    print(
-        "{} snps, {}-{} individuals (avg: {})".format(
-            len(ss),
-            np.min(ss.N),
-            np.max(ss.N),
-            np.mean(ss.N),
-        )
-    )
-
-    # filter to monoallelic SNPs only (remove indels and multi-allelic variants)
-    ss["is_monoallelic"] = (ss.A1.str.len() == 1) & (ss.A2.str.len() == 1)
-    n_removed = (~ss.is_monoallelic).sum()
-    ss = ss[ss.is_monoallelic].drop(columns=["is_monoallelic"])
-    print("{} non-monoallelic variants removed".format(n_removed))
-
-    # remove duplicate SNP IDs and keep the first occurrence
-    n_dups = ss.SNP.duplicated().sum()
-    if n_dups > 0:
-        ss = ss[~ss.SNP.duplicated(keep="first")]
-        print("{} duplicate SNP IDs removed".format(n_dups))
-
-    ss = pd.merge(ss, print_snps[["SNP"]], on="SNP", how="inner")
-    print(len(ss), "snps typed")
-
-    # read ld scores
-    print("reading in ld scores")
-    ld_frames = [pd.read_csv(f"{args.ldscores_chr}{c}.l2.ldscore.gz", sep=r"\s+") for c in range(1, 23)]
-    ld = pd.concat([frame for frame in ld_frames if not frame.empty], axis=0)
-
-    def read_m_file(path: str | Path) -> int:
-        with Path(path).open() as handle:
-            return int(next(handle))
+    ss = _read_sumstats(args.sumstats_stem)
+    ss = _filter_sumstats(ss, print_snps)
+    ld, read_m_file = _read_ld_scores(args.ldscores_chr)
 
     if args.no_M_5_50:
         M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M") for c in range(1, 23)])
@@ -80,21 +197,7 @@ def run(args: argparse.Namespace) -> None:
     ssld = pd.merge(ss, ld, on="SNP", how="left")
     print(len(ssld), "hm3 snps with sumstats after merge.")
 
-    # estimate heritability using aggregate estimator
-    def esth2g(ssld: pd.DataFrame) -> tuple[float, float, float, float]:
-        ssld_valid = ssld[ssld.L2.notnull()]
-        if len(ssld_valid) == 0:
-            raise ValueError("No SNPs with valid LD scores found")
-        meanchi2 = (ssld_valid.Z**2).mean()
-        meanNl2 = (ssld_valid.N * ssld_valid.L2).mean()
-        if meanNl2 == 0 or np.isnan(meanNl2):
-            raise ValueError("Mean N*L2 is zero or NaN - cannot estimate heritability")
-        sigma2g = (meanchi2 - 1) / meanNl2
-        h2g = sigma2g * M
-        K = M / meanNl2  # h2g = K (meanchi2 - 1)
-        return h2g, sigma2g, meanchi2, K
-
-    h2g, sigma2g, meanchi2, K = esth2g(ssld)
+    h2g, sigma2g, meanchi2, K = _estimate_h2g(ssld, M)
     h2g = max(h2g, 0.03)  # 0.03 is an arbitrarily chosen minimum
     print("mean chi2:", meanchi2)
     print("h2g estimated at:", h2g, "sigma2g =", sigma2g)
@@ -103,89 +206,18 @@ def run(args: argparse.Namespace) -> None:
         norm = meanchi2 / (1 + args.set_h2g / K)
         print("dividing all z-scores by", np.sqrt(norm))
         ssld.Z /= np.sqrt(norm)
-        h2g, sigma2g, _, _ = esth2g(ssld)
+        h2g, sigma2g, _, _ = _estimate_h2g(ssld, M)
         print("h2g is now", h2g)
 
-    # write h2g results to file
     dirname = Path(f"{args.sumstats_stem}.{args.refpanel_name}")
     fs.makedir(dirname)
     if 1 in args.chroms:
-        print("writing info file")
-        info = pd.DataFrame(
-            [
-                {
-                    "pheno": args.sumstats_stem.split("/")[-1],
-                    "h2g": h2g,
-                    "sigma2g": sigma2g,
-                    "Nbar": ss.N.mean(),
-                }
-            ]
-        )
-        info.to_csv(dirname / "info", sep="\t", index=False)
+        _write_info_file(dirname, args.sumstats_stem, h2g, sigma2g, ss)
 
-    # preprocess ld blocks
     t0 = time.time()
     for c in args.chroms:
         print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-        # get refpanel snp metadata for this chromosome
-        snps = refpanel.bim_df(c)
-        snps = pd.merge(snps, print_snps, on="SNP", how="left")
-        snps["printsnp"] = snps.printsnp.notnull()
-        print(
-            len(snps),
-            "snps in refpanel",
-            len(snps.columns),
-            "columns, including metadata",
-        )
-
-        # merge annot and sumstats
-        print("reconciling")
-        snps = ga.reconciled_to(snps, ss, ["Z"], othercolnames=["N"], missing_val=np.nan)
-        snps["typed"] = snps.Z.notnull()
-        snps["ahat"] = snps.Z / np.sqrt(snps.N)
-
-        # initialize result dataframe
-        # I = no weights
-        # h = heuristic weights, using R_o
-        snps["Winv_ahat_I"] = np.nan  # = W_o^{-1} ahat_o
-        snps["R_Winv_ahat_I"] = np.nan  # = R_{*o} W_o^{-1} ahat_o
-        snps["Winv_ahat_h"] = np.nan  # = W_o^{-1} ahat_o
-        snps["R_Winv_ahat_h"] = np.nan  # = R_{*o} W_o^{-1} ahat_o
-
-        # restrict to ld blocks in this chr and process them in chunks
-        for ldblock, X, meta, ind in refpanel.block_data(ldblocks, c, meta=snps):
-            svd_r_path = Path(f"{args.svd_stem}{ldblock.name}.R.npz")
-            svd_r2_path = Path(f"{args.svd_stem}{ldblock.name}.R2.npz")
-            if meta.printsnp.sum() == 0 or not svd_r_path.exists():
-                print("no svd snps found in this block")
-                continue
-            print(meta.printsnp.sum(), "svd snps", meta.typed.sum(), "typed snps")
-            if meta.typed.sum() == 0:
-                print("no typed snps found in this block")
-                snps.loc[ind, ["R_Winv_ahat_I", "R_Winv_ahat_h"]] = 0
-                continue
-            R = np.load(svd_r_path)
-            R2 = np.load(svd_r2_path)
-            N = meta[meta.typed.values].N.mean()
-            meta_svd = meta[meta.printsnp.values]
-
-            # multiply ahat by the weights
-            snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(
-                R,
-                R2,
-                sigma2g,
-                N,
-                meta_svd.ahat.values,
-                mode="Winv_ahat_I",
-            )
-            snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(
-                R,
-                R2,
-                sigma2g,
-                N,
-                meta_svd.ahat.values,
-                mode="Winv_ahat_h",
-            )
+        snps = _process_chromosome(refpanel, ldblocks, c, print_snps, ss, args.svd_stem, sigma2g)
 
         print("writing processed sumstats")
         with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:

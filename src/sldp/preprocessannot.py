@@ -15,117 +15,132 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 
 
+def _load_ldblocks(path: str) -> pd.DataFrame:
+    """Load LD blocks and drop blocks overlapping the MHC region."""
+
+    mhc_bp = [25684587, 35455756]
+    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
+    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
+    return ldblocks[~mhcblocks]
+
+
+def _load_print_snps(path: str) -> pd.DataFrame:
+    """Load the set of SNPs that should be retained in outputs."""
+
+    print_snps = pd.read_csv(path, header=None, names=["SNP"])
+    print_snps["printsnp"] = True
+    return print_snps
+
+
+def _prepare_chromosome_annotation(
+    refpanel: gd.Dataset,
+    annot: ga.Annotation,
+    chrom: int,
+    print_snps: pd.DataFrame,
+    alpha: float,
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    """Load and reconcile one annotation on one chromosome."""
+
+    snps = refpanel.bim_df(chrom)
+    snps = ga.smart_merge(snps, refpanel.frq_df(chrom)[["SNP", "MAF"]])
+    print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
+
+    print("reading annot", annot.filestem())
+    names = annot.names(chrom)
+    result_names = [name + ".R" for name in names]
+    annot_df = annot.sannot_df(chrom)
+    if "SNP" in annot_df.columns:
+        print("not a thinannot => doing full reconciliation of snps and allele coding")
+        snps = ga.reconciled_to(snps, annot_df, names, missing_val=0)
+    else:
+        print("detected thinannot, so assuming that annotation is synched to refpanel")
+        snps = pd.concat([snps, annot_df[names]], axis=1)
+
+    print("merging in print_snps")
+    snps = pd.merge(snps, print_snps, how="left", on="SNP")
+    snps["printsnp"] = snps.printsnp.notnull()
+
+    if alpha != -1:
+        print("scaling by maf according to alpha=", alpha)
+        scale = np.power(2 * snps.MAF.values * (1 - snps.MAF.values), (1.0 + alpha) / 2)
+        snps[names] = snps[names].values * scale[:, None]
+
+    snps = pd.concat([snps, pd.DataFrame(np.zeros(snps[names].shape), columns=result_names)], axis=1)
+    snps[names] = snps[names].astype(float)
+    return snps, names, result_names
+
+
+def _write_annotation_info(snps: pd.DataFrame, names: list[str], output_path: str) -> None:
+    """Write per-annotation summary metrics for one chromosome."""
+
+    print("computing basic statistics and writing")
+    info = pd.DataFrame(columns=["M", "M_5_50", "sqnorm", "sqnorm_5_50", "supp", "supp_5_50"])
+    info["name"] = names
+    info.set_index("name", inplace=True)
+    info["M"] = len(snps)
+    info["sqnorm"] = np.linalg.norm(snps[names], axis=0) ** 2
+    info["supp"] = np.linalg.norm(snps[names], ord=0, axis=0)
+    maf_mask = (snps.MAF >= 0.05).values
+    info["M_5_50"] = maf_mask.sum()
+    info["sqnorm_5_50"] = np.linalg.norm(snps.loc[maf_mask, names], axis=0) ** 2
+    info["supp_5_50"] = np.linalg.norm(snps.loc[maf_mask, names], ord=0, axis=0)
+    info.to_csv(output_path, sep="\t")
+
+
+def _compute_rv_values(
+    refpanel: gd.Dataset,
+    ldblocks: pd.DataFrame,
+    chrom: int,
+    snps: pd.DataFrame,
+    names: list[str],
+    result_names: list[str],
+) -> None:
+    """Fill per-SNP RV values for one chromosome."""
+
+    for _, X, meta, ind in refpanel.block_data(ldblocks, chrom, meta=snps):
+        if meta.printsnp.sum() == 0:
+            print("no print-snps in this block")
+            continue
+        print(meta.printsnp.sum(), "print-snps")
+        if (meta[names] == 0).values.all():
+            print("annotations are all 0 in this block")
+            snps.loc[ind, result_names] = 0
+            continue
+
+        mask = meta.printsnp.values
+        annotation_values = meta[names].values
+        xv = X.dot(annotation_values)
+        snps.loc[ind[mask], result_names] = X[:, mask].T.dot(xv[:, -len(names) :]) / X.shape[0]
+
+
+def _write_rv_output(snps: pd.DataFrame, names: list[str], result_names: list[str], output_path: Path) -> None:
+    """Write the processed RV output for one chromosome."""
+
+    print("writing output")
+    with gzip.open(output_path, "wt") as handle:
+        snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + result_names].to_csv(handle, index=False, sep="\t")
+
+
 def run(args: argparse.Namespace) -> None:
     """Preprocess signed annotations into LD-profile tables by chromosome."""
 
     print("initializing...")
 
-    # basic initialization
-    mhc_bp = [25684587, 35455756]
     refpanel = gd.Dataset(args.bfile_chr)
     annots = [ga.Annotation(annot) for annot in args.sannot_chr]
-
-    # read in ld blocks, remove MHC, read SNPs to print
-    ldblocks = pd.read_csv(
-        args.ld_blocks,
-        sep=r"\s+",
-        header=None,
-        names=["chr", "start", "end"],
-    )
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
-    ldblocks = ldblocks[~mhcblocks]
+    ldblocks = _load_ldblocks(args.ld_blocks)
     print(len(ldblocks), "loci after removing MHC")
-    print_snps = pd.read_csv(args.print_snps, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
+    print_snps = _load_print_snps(args.print_snps)
     print(len(print_snps), "print snps")
 
-    # process annotations
     for annot in annots:
         t0 = time.time()
         for c in args.chroms:
             print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-            # get refpanel snp metadata for this chromosome
-            snps = refpanel.bim_df(c)
-            snps = ga.smart_merge(snps, refpanel.frq_df(c)[["SNP", "MAF"]])
-            print(
-                len(snps),
-                "snps in refpanel",
-                len(snps.columns),
-                "columns, including metadata",
-            )
-
-            # read in annotation
-            print("reading annot", annot.filestem())
-            names = annot.names(c)  # names of annotations
-            namesR = [n + ".R" for n in names]  # names of results
-            a = annot.sannot_df(c)
-            if "SNP" in a.columns:
-                print("not a thinannot => doing full reconciliation of snps and allele coding")
-                snps = ga.reconciled_to(snps, a, names, missing_val=0)
-            else:
-                print("detected thinannot, so assuming that annotation is synched to refpanel")
-                snps = pd.concat([snps, a[names]], axis=1)
-
-            # add information on which snps to print
-            print("merging in print_snps")
-            snps = pd.merge(snps, print_snps, how="left", on="SNP")
-            snps["printsnp"] = snps.printsnp.notnull()
-
-            # put on per-normalized-genotype scale
-            if args.alpha != -1:
-                print("scaling by maf according to alpha=", args.alpha)
-                snps[names] = (
-                    snps[names].values
-                    * np.power(
-                        2 * snps.MAF.values * (1 - snps.MAF.values),
-                        (1.0 + args.alpha) / 2,
-                    )[:, None]
-                )
-
-            # make room for RV and make sure annotation values are treated as floats
-            snps = pd.concat(
-                [snps, pd.DataFrame(np.zeros(snps[names].shape), columns=namesR)],
-                axis=1,
-            )
-            snps[names] = snps[names].astype(float)
-
-            # compute simple statistics about annotation
-            print("computing basic statistics and writing")
-            info = pd.DataFrame(columns=["M", "M_5_50", "sqnorm", "sqnorm_5_50", "supp", "supp_5_50"])
-            info["name"] = names
-            info.set_index("name", inplace=True)
-            info["M"] = len(snps)
-            info["sqnorm"] = np.linalg.norm(snps[names], axis=0) ** 2
-            info["supp"] = np.linalg.norm(snps[names], ord=0, axis=0)
-            M_5_50 = (snps.MAF >= 0.05).values
-            info["M_5_50"] = M_5_50.sum()
-            info["sqnorm_5_50"] = np.linalg.norm(snps.loc[M_5_50, names], axis=0) ** 2
-            info["supp_5_50"] = np.linalg.norm(snps.loc[M_5_50, names], ord=0, axis=0)
-            info.to_csv(annot.info_filename(c), sep="\t")
-
-            # process ldblocks one by one
-            for ldblock, X, meta, ind in refpanel.block_data(ldblocks, c, meta=snps):
-                if meta.printsnp.sum() == 0:
-                    print("no print-snps in this block")
-                    continue
-                print(meta.printsnp.sum(), "print-snps")
-                if (meta[names] == 0).values.all():
-                    print("annotations are all 0 in this block")
-                    snps.loc[ind, namesR] = 0
-                else:
-                    mask = meta.printsnp.values
-                    V = meta[names].values
-                    XV = X.dot(V)
-                    snps.loc[ind[mask], namesR] = X[:, mask].T.dot(XV[:, -len(names) :]) / X.shape[0]
-
-            # write
-            print("writing output")
-            with gzip.open(Path(annot.RV_filename(c)), "wt") as f:
-                snps.loc[snps.printsnp, ["SNP", "A1", "A2"] + names + namesR].to_csv(
-                    f,
-                    index=False,
-                    sep="\t",
-                )
+            snps, names, result_names = _prepare_chromosome_annotation(refpanel, annot, c, print_snps, args.alpha)
+            _write_annotation_info(snps, names, annot.info_filename(c))
+            _compute_rv_values(refpanel, ldblocks, c, snps, names, result_names)
+            _write_rv_output(snps, names, result_names, Path(annot.RV_filename(c)))
 
             del snps
             memo.reset()
