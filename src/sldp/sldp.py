@@ -17,8 +17,8 @@ import sldp.storyteller as storyteller
 import sldp.weights as weights
 
 
-def main() -> None:
-    """Run the main SLDP regression command-line entry point."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for the main `sldp` command."""
 
     parser = argparse.ArgumentParser()
     # required arguments
@@ -175,13 +175,11 @@ def main() -> None:
         + "not supplied, will be read from config file.",
     )
 
-    print("=====")
-    print(" ".join(sys.argv))
-    print("=====")
-    args = parser.parse_args()
-    config.add_default_params(args)
-    pretty.print_namespace(args)
-    print("=====")
+    return parser
+
+
+def run(args: argparse.Namespace) -> None:
+    """Execute SLDP regression from a parsed argument namespace."""
 
     preprocess_sumstats(args)
     preprocess_sannots(args)
@@ -449,8 +447,22 @@ def main() -> None:
     print("done")
 
 
+def main() -> None:
+    """Run the main SLDP regression command-line entry point."""
+
+    print("=====")
+    print(" ".join(sys.argv))
+    print("=====")
+    args = build_parser().parse_args()
+    config.add_default_params(args)
+    pretty.print_namespace(args)
+    print("=====")
+
+    run(args)
+
+
 # preprocess any sumstats that need preprocessing
-def preprocess_sumstats(args):
+def preprocess_sumstats(args: argparse.Namespace) -> None:
     import os
 
     if args.pss_chr is None:
@@ -493,7 +505,7 @@ def preprocess_sumstats(args):
 
 
 # preprocess any annotations that need preprocessing
-def preprocess_sannots(args):
+def preprocess_sannots(args: argparse.Namespace) -> None:
     import os
 
     for sannot in args.sannot_chr:
