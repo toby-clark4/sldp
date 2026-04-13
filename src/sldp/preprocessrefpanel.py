@@ -11,6 +11,8 @@ import sldp.dataset as gd
 import sldp.fs as fs
 import sldp.memo as memo
 import sldp.pretty as pretty
+from sldp.workflow_io import load_ldblocks as _load_ldblocks
+from sldp.workflow_io import load_print_snps as _load_print_snps
 
 
 def _best_svd(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -30,23 +32,6 @@ def _svd_output_path(svd_stem: str | Path, block_name: int, suffix: str) -> Path
     """Build the output path for a saved block SVD artifact."""
 
     return Path(f"{svd_stem}{block_name}.{suffix}.npz")
-
-
-def _load_ldblocks(path: str) -> pd.DataFrame:
-    """Load LD blocks and remove those overlapping the MHC region."""
-
-    mhc = [25684587, 35455756]
-    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc[0]) & (ldblocks.start < mhc[1])
-    return ldblocks[~mhcblocks]
-
-
-def _load_print_snps(path: str) -> pd.DataFrame:
-    """Load the set of SNPs retained in the reduced regression panel."""
-
-    print_snps = pd.read_csv(path, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
-    return print_snps
 
 
 def _prepare_chromosome_snps(refpanel: gd.Dataset, chrom: int, print_snps: pd.DataFrame) -> pd.DataFrame:
@@ -133,36 +118,37 @@ def build_parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace) -> None:
     """Preprocess a reference panel into truncated per-block SVDs."""
 
-    refpanel = gd.Dataset(args.bfile_chr)
-    fs.makedir_for_file(args.svd_stem)
+    with memo.cache_scope():
+        refpanel = gd.Dataset(args.bfile_chr)
+        fs.makedir_for_file(args.svd_stem)
 
-    ldblocks = _load_ldblocks(args.ld_blocks)
-    print(len(ldblocks), "loci after removing MHC")
-    print_snps = _load_print_snps(args.print_snps)
-    print(len(print_snps), "print snps")
+        ldblocks = _load_ldblocks(args.ld_blocks)
+        print(len(ldblocks), "loci after removing MHC")
+        print_snps = _load_print_snps(args.print_snps)
+        print(len(print_snps), "print snps")
 
-    for c in args.chroms:
-        print("loading chr", c, "of", args.chroms)
-        snps = _prepare_chromosome_snps(refpanel, c, print_snps)
+        for c in args.chroms:
+            print("loading chr", c, "of", args.chroms)
+            snps = _prepare_chromosome_snps(refpanel, c, print_snps)
 
-        for ldblock, X, meta, _ in refpanel.block_data(ldblocks, c, meta=snps):
-            if X is None or meta is None:
-                raise ValueError("reference panel block processing requires genotypes and metadata")
-            if meta.printsnp.sum() == 0:
-                print("no print snps found in this block")
-                continue
+            for ldblock, X, meta, _ in refpanel.block_data(ldblocks, c, meta=snps):
+                if X is None or meta is None:
+                    raise ValueError("reference panel block processing requires genotypes and metadata")
+                if meta.printsnp.sum() == 0:
+                    print("no print snps found in this block")
+                    continue
 
-            _save_block_svds(
-                X_print=X[:, meta.printsnp.values],
-                block_name=ldblock.name,
-                svd_stem=args.svd_stem,
-                spectrum_percent=args.spectrum_percent,
-                num_print_snps=int(meta.printsnp.sum()),
-            )
+                _save_block_svds(
+                    X_print=X[:, meta.printsnp.values],
+                    block_name=ldblock.name,
+                    svd_stem=args.svd_stem,
+                    spectrum_percent=args.spectrum_percent,
+                    num_print_snps=int(meta.printsnp.sum()),
+                )
 
-        del snps
-        memo.reset()
-        gc.collect()
+            del snps
+            memo.reset()
+            gc.collect()
     print("done")
 
 

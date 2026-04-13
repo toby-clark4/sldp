@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 import sldp.annotation as ga
 import sldp.dataset as gd
@@ -35,10 +36,11 @@ def write(
 
     # read sumstats
     print("re-reading sumstats")
+    pss_path = Path(args.pss_chr)
     ss = pd.concat(
         [
             pd.read_csv(
-                args.pss_chr + str(c) + ".pss.gz",
+                pss_path / f"{c}.pss.gz",
                 sep="\t",
                 usecols=["N", "Winv_ahat_I"],
             )
@@ -133,7 +135,7 @@ def write(
         plt.xlabel(r"residual $Rv$")
         plt.ylabel(r"residual $Z$")
 
-        filename = "{}/chr{}:{}-{}.pdf".format(folder, c, start, end)
+        filename = Path(folder) / f"chr{c}:{start}-{end}.pdf"
         fs.makedir_for_file(filename)
         plt.savefig(filename)
         plt.close()

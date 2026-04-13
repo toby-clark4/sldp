@@ -1,16 +1,28 @@
 import collections.abc
 import functools
+import weakref
+from contextlib import contextmanager
 from typing import Any
 
 
-_all_memos: list["memoized"] = []
+_all_memos: "weakref.WeakSet[memoized]" = weakref.WeakSet()
 
 
 def reset() -> None:
     """Clear all memoized caches registered through this module."""
 
-    for memo in _all_memos:
+    for memo in list(_all_memos):
         memo.reset()
+
+
+@contextmanager
+def cache_scope() -> collections.abc.Iterator[None]:
+    """Provide an explicit memoization lifetime for workflow code and tests."""
+
+    try:
+        yield
+    finally:
+        reset()
 
 
 class memoized:
@@ -19,7 +31,7 @@ class memoized:
     def __init__(self, func: collections.abc.Callable[..., Any]) -> None:
         self.func = func
         self.cache: dict[Any, Any] = {}
-        _all_memos.append(self)
+        _all_memos.add(self)
         functools.update_wrapper(self, func)
 
     def reset(self) -> None:

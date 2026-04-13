@@ -1,12 +1,68 @@
 [build-system]
 requires = [
-    "setuptools>=42",
+    "setuptools>=61",
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "sldp"
+version = "1.1.5"
+description = "Signed LD profile regression"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Yakir Reshef", email = "yreshef@broadinstitute.org" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "pandas>=2",
+    "scipy",
+    "matplotlib",
+    "pysnptools",
+]
+
+[project.urls]
+Homepage = "http://github.com/yakirr/sldp"
+"Bug Tracker" = "https://github.com/yakirr/sldp/issues"
+Tutorial = "https://github.com/yakirr/sldp/blob/master/README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+sldp = "sldp.sldp:main"
+preprocessannot = "sldp.preprocessannot:main"
+preprocesspheno = "sldp.preprocesspheno:main"
+preprocessrefpanel = "sldp.preprocessrefpanel:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live_baseline: runs installed-package baseline parity checks in the sldp conda environment",
+]
 
 [tool.ruff]
 line-length = 150

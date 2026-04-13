@@ -35,9 +35,7 @@ class TestDataset:
         ldblocks = ldblocks.iloc[:2][["chr", "start", "end"]]
         meta = dataset.bim_df(1)
 
-        blocks = list(
-            dataset.block_data(ldblocks, 1, meta=meta, genos=False, verbose=0)
-        )
+        blocks = list(dataset.block_data(ldblocks, 1, meta=meta, genos=False, verbose=0))
 
         assert len(blocks) == 2
         first_block, _, first_meta, first_index = blocks[0]

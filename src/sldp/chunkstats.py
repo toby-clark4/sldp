@@ -139,7 +139,13 @@ def residualize(
 
 
 # do sign-flipping to get p-value
-def signflip(q: np.ndarray, T: int, printmem: bool = True, mode: str = "sum") -> tuple[float, float] | None:
+def signflip(
+    q: np.ndarray,
+    T: int,
+    printmem: bool = True,
+    mode: str = "sum",
+    rng: np.random.Generator | np.random.RandomState | None = None,
+) -> tuple[float, float] | None:
     """Estimate a p-value by randomly sign-flipping independent chunk scores."""
 
     def mask(a, t):
@@ -169,8 +175,10 @@ def signflip(q: np.ndarray, T: int, printmem: bool = True, mode: str = "sum") ->
     null = np.zeros(T)
     current = 0
     block = 100000
+    if rng is None:
+        rng = np.random.RandomState()
     while current < len(null):
-        s = (-1) ** np.random.binomial(1, 0.5, size=(block, len(q)))
+        s = (-1) ** rng.binomial(1, 0.5, size=(block, len(q)))
         if mode == "sum":
             null[current : current + block] = s.dot(q)
         elif mode == "medrank":

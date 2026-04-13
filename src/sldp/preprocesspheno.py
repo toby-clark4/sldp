@@ -16,20 +16,8 @@ import sldp.fs as fs
 import sldp.memo as memo
 import sldp.pretty as pretty
 import sldp.weights as weights
-
-
-def _load_ldblocks(path: str) -> pd.DataFrame:
-    """Load chromosome LD blocks."""
-
-    return pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
-
-
-def _load_print_snps(path: str) -> pd.DataFrame:
-    """Load the SNP set used for SVD and processed outputs."""
-
-    print_snps = pd.read_csv(path, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
-    return print_snps
+from sldp.workflow_io import load_ldblocks as _load_ldblocks
+from sldp.workflow_io import load_print_snps as _load_print_snps
 
 
 def _read_sumstats(sumstats_stem: str) -> pd.DataFrame:
@@ -180,54 +168,55 @@ def _process_chromosome(
 def run(args: argparse.Namespace) -> None:
     """Preprocess GWAS summary statistics into weighted per-block inputs."""
 
-    print("initializing...")
+    with memo.cache_scope():
+        print("initializing...")
 
-    refpanel = gd.Dataset(args.bfile_chr)
-    ldblocks = _load_ldblocks(args.ld_blocks)
-    print_snps = _load_print_snps(args.print_snps)
-    print(len(print_snps), "svd snps")
+        refpanel = gd.Dataset(args.bfile_chr)
+        ldblocks = _load_ldblocks(args.ld_blocks)
+        print_snps = _load_print_snps(args.print_snps)
+        print(len(print_snps), "svd snps")
 
-    ss = _read_sumstats(args.sumstats_stem)
-    ss = _filter_sumstats(ss, print_snps)
-    ld, read_m_file = _read_ld_scores(args.ldscores_chr)
+        ss = _read_sumstats(args.sumstats_stem)
+        ss = _filter_sumstats(ss, print_snps)
+        ld, read_m_file = _read_ld_scores(args.ldscores_chr)
 
-    if args.no_M_5_50:
-        M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M") for c in range(1, 23)])
-    else:
-        M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M_5_50") for c in range(1, 23)])
-    print(len(ld), "snps with ld scores")
-    ssld = pd.merge(ss, ld, on="SNP", how="left")
-    print(len(ssld), "hm3 snps with sumstats after merge.")
+        if args.no_M_5_50:
+            M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M") for c in range(1, 23)])
+        else:
+            M = sum([read_m_file(f"{args.ldscores_chr}{c}.l2.M_5_50") for c in range(1, 23)])
+        print(len(ld), "snps with ld scores")
+        ssld = pd.merge(ss, ld, on="SNP", how="left")
+        print(len(ssld), "hm3 snps with sumstats after merge.")
 
-    h2g, sigma2g, meanchi2, K = _estimate_h2g(ssld, M)
-    h2g = max(h2g, 0.03)  # 0.03 is an arbitrarily chosen minimum
-    print("mean chi2:", meanchi2)
-    print("h2g estimated at:", h2g, "sigma2g =", sigma2g)
-    if args.set_h2g:
-        print("scaling Z-scores to achieve h2g of", args.set_h2g)
-        norm = meanchi2 / (1 + args.set_h2g / K)
-        print("dividing all z-scores by", np.sqrt(norm))
-        ssld.Z /= np.sqrt(norm)
-        h2g, sigma2g, _, _ = _estimate_h2g(ssld, M)
-        print("h2g is now", h2g)
+        h2g, sigma2g, meanchi2, K = _estimate_h2g(ssld, M)
+        h2g = max(h2g, 0.03)  # 0.03 is an arbitrarily chosen minimum
+        print("mean chi2:", meanchi2)
+        print("h2g estimated at:", h2g, "sigma2g =", sigma2g)
+        if args.set_h2g:
+            print("scaling Z-scores to achieve h2g of", args.set_h2g)
+            norm = meanchi2 / (1 + args.set_h2g / K)
+            print("dividing all z-scores by", np.sqrt(norm))
+            ssld.Z /= np.sqrt(norm)
+            h2g, sigma2g, _, _ = _estimate_h2g(ssld, M)
+            print("h2g is now", h2g)
 
-    dirname = Path(f"{args.sumstats_stem}.{args.refpanel_name}")
-    fs.makedir(dirname)
-    if 1 in args.chroms:
-        _write_info_file(dirname, args.sumstats_stem, h2g, sigma2g, ss)
+        dirname = Path(f"{args.sumstats_stem}.{args.refpanel_name}")
+        fs.makedir(dirname)
+        if 1 in args.chroms:
+            _write_info_file(dirname, args.sumstats_stem, h2g, sigma2g, ss)
 
-    t0 = time.time()
-    for c in args.chroms:
-        print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-        snps = _process_chromosome(refpanel, ldblocks, c, print_snps, ss, args.svd_stem, sigma2g)
+        t0 = time.time()
+        for c in args.chroms:
+            print(time.time() - t0, ": loading chr", c, "of", args.chroms)
+            snps = _process_chromosome(refpanel, ldblocks, c, print_snps, ss, args.svd_stem, sigma2g)
 
-        print("writing processed sumstats")
-        with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:
-            snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(f, index=False, sep="\t")
+            print("writing processed sumstats")
+            with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:
+                snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(f, index=False, sep="\t")
 
-        del snps
-        memo.reset()
-        gc.collect()
+            del snps
+            memo.reset()
+            gc.collect()
 
     print("done")
 

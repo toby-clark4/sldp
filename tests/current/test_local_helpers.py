@@ -45,6 +45,22 @@ class TestMemoHelpers:
         assert add(2, y=3) == 5
         assert calls == [(2, 3)]
 
+    def test_cache_scope_resets_registered_memos_on_exit(self) -> None:
+        calls: list[int] = []
+
+        @memo.memoized
+        def square(x: int) -> int:
+            calls.append(x)
+            return x * x
+
+        with memo.cache_scope():
+            assert square(4) == 16
+            assert square(4) == 16
+            assert calls == [4]
+
+        assert square(4) == 16
+        assert calls == [4, 4]
+
 
 class TestPrettyHelpers:
     def test_print_namespace_omits_private_attributes(self, capsys) -> None:

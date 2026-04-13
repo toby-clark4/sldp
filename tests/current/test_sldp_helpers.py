@@ -207,6 +207,48 @@ class TestComputeAnnotationResult:
         else:
             raise AssertionError("expected invalid signflip mode to raise ValueError")
 
+    def test_compute_annotation_result_passes_explicit_rng_to_signflip(self, monkeypatch) -> None:
+        context = main_sldp.AnnotationContext(
+            annots=[],
+            background_annots=[],
+            marginal_name_groups=[["annot_signal.R"]],
+            background_name_groups=[],
+            marginal_names=["annot_signal.R"],
+            background_names=[],
+            marginal_infos=pd.DataFrame({"sqnorm": [4.0], "supp": [2.0], "M": [10.0]}, index=["annot_signal"]),
+        )
+        seen: dict[str, object] = {}
+        rng = np.random.default_rng(123)
+
+        monkeypatch.setattr(main_sldp.cs, "get_est", lambda *args, **kwargs: 1.0)
+        monkeypatch.setattr(main_sldp.cs, "residualize", lambda *args, **kwargs: (np.array([1.0]), np.array([1.0]), np.array([]), np.array([])))
+        monkeypatch.setattr(main_sldp.cs, "jackknife_se", lambda *args, **kwargs: 0.5)
+
+        def fake_signflip(*args, **kwargs):
+            seen["rng"] = kwargs["rng"]
+            return 0.1, 1.7
+
+        monkeypatch.setattr(main_sldp.cs, "signflip", fake_signflip)
+
+        args = argparse.Namespace(T=100, stat="sum", bothp=True, fastp=False, more_stats=False)
+        result = main_sldp._compute_annotation_result(
+            args=args,
+            pheno_name="toy",
+            name="annot_signal.R",
+            annotation_context=context,
+            index=0,
+            h2g=0.5,
+            sigma2g=0.25,
+            chunk_nums=[np.array([1.0])],
+            chunk_denoms=[np.array([[1.0]])],
+            loo_nums=[np.array([1.0])],
+            loo_denoms=[np.array([[1.0]])],
+            rng=rng,
+        )
+
+        assert seen["rng"] is rng
+        assert result.row["p"] == 0.1
+
 
 class TestWriteVerboseOutputs:
     def test_write_verbose_outputs_creates_chunk_and_coeff_files(self, tmp_path: Path) -> None:

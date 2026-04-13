@@ -1,13 +1,10 @@
 import argparse
 import os
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scipy.stats as st
 
 import sldp.annotation as ga
 import sldp.chunkstats as cs
@@ -17,30 +14,20 @@ import sldp.memo as memo
 import sldp.pretty as pretty
 import sldp.storyteller as storyteller
 import sldp.weights as weights
-
-
-@dataclass(frozen=True)
-class AnnotationContext:
-    """Annotation metadata needed by the main SLDP regression workflow."""
-
-    annots: list[ga.Annotation]
-    background_annots: list[ga.Annotation]
-    marginal_name_groups: list[list[str]]
-    background_name_groups: list[list[str]]
-    marginal_names: list[str]
-    background_names: list[str]
-    marginal_infos: pd.DataFrame
-
-
-@dataclass(frozen=True)
-class AnnotationResult:
-    """Computed statistics for a single marginal annotation."""
-
-    row: dict[str, float | str]
-    q: np.ndarray
-    r: np.ndarray
-    mux: np.ndarray
-    muy: np.ndarray
+from sldp._processed_inputs import ensure_processed_inputs as _ensure_processed_inputs_impl
+from sldp._processed_inputs import format_missing_message as _format_missing_message_impl
+from sldp._processed_inputs import missing_annotation_artifacts as _missing_annotation_artifacts_impl
+from sldp._processed_inputs import missing_pheno_artifacts as _missing_pheno_artifacts_impl
+from sldp._processed_inputs import preprocess_sannots as _preprocess_sannots_impl
+from sldp._processed_inputs import preprocess_sumstats as _preprocess_sumstats_impl
+from sldp._processed_inputs import processed_pss_path as _processed_pss_path_impl
+from sldp._regression_workflow import AnnotationContext, AnnotationResult
+from sldp._regression_workflow import build_annotation_context
+from sldp._regression_workflow import collect_block_statistics
+from sldp._regression_workflow import compute_annotation_result
+from sldp._regression_workflow import load_trait_info
+from sldp._regression_workflow import write_verbose_outputs
+from sldp.workflow_io import load_ldblocks
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -207,48 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _build_annotation_context(args: argparse.Namespace) -> AnnotationContext:
-    """Load annotation objects, names, and summary metadata for regression."""
-
-    annots = [ga.Annotation(annot) for annot in args.sannot_chr]
-    marginal_name_groups = [[name for name in annot.names(22, True) if ".R" in name] for annot in annots]
-    background_annots = [ga.Annotation(annot) for annot in args.background_sannot_chr]
-    background_name_groups = [[name for name in annot.names(22, True) if ".R" in name] for annot in background_annots]
-    marginal_names = sum(marginal_name_groups, [])
-    background_names = sum(background_name_groups, [])
-    marginal_infos = pd.concat([annot.info_df(args.chroms) for annot in annots], axis=0)
-
-    if len(set(background_names) & set(marginal_names)) > 0:
-        raise ValueError("the background annotation names and the marginal annotation names must be disjoint sets")
-
-    return AnnotationContext(
-        annots=annots,
-        background_annots=background_annots,
-        marginal_name_groups=marginal_name_groups,
-        background_name_groups=background_name_groups,
-        marginal_names=marginal_names,
-        background_names=background_names,
-        marginal_infos=marginal_infos,
-    )
-
-
-def _load_ldblocks(path: str) -> pd.DataFrame:
-    """Load LD blocks and remove blocks overlapping the MHC region."""
-
-    mhc_bp = [25684587, 35455756]
-    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
-    return ldblocks[~mhcblocks]
+    return build_annotation_context(args, annotation_module=ga)
 
 
 def _load_trait_info(pss_chr: str) -> tuple[str, float, float]:
-    """Load phenotype naming and heritability metadata from processed sumstats."""
-
-    pss_path = Path(pss_chr)
-    pheno_name = pss_path.name.replace(".KG3.95", "")
-    sumstats_info = pd.read_csv(pss_path / "info", sep="\t")
-    sigma2g = sumstats_info.loc[0].sigma2g
-    h2g = sumstats_info.loc[0].h2g
-    return pheno_name, sigma2g, h2g
+    return load_trait_info(pss_chr)
 
 
 def _collect_block_statistics(
@@ -260,99 +210,15 @@ def _collect_block_statistics(
 ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray], pd.DataFrame]:
     """Collect per-block numerator and denominator terms across chromosomes."""
 
-    numerators: dict[int, np.ndarray] = {}
-    denominators: dict[int, np.ndarray] = {}
-    t0 = time.time()
-    combined_annotation_names = annotation_context.background_names + annotation_context.marginal_names
-    pss_path = Path(args.pss_chr)
-    svd_stem = Path(args.svd_stem)
-    annotation_groups = list(zip(annotation_context.background_annots, annotation_context.background_name_groups)) + list(
-        zip(annotation_context.annots, annotation_context.marginal_name_groups)
+    return collect_block_statistics(
+        args,
+        refpanel,
+        ldblocks,
+        annotation_context,
+        sigma2g,
+        weights_module=weights,
+        memo_module=memo,
     )
-
-    for c in args.chroms:
-        print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-
-        snps = refpanel.bim_df(c)
-        print(len(snps), "snps in refpanel", len(snps.columns), "columns, including metadata")
-
-        print("reading sumstats")
-        ss = pd.read_csv(pss_path / f"{c}.pss.gz", sep="\t")
-        print(np.isnan(ss[args.weights]).sum(), "sumstats nans out of", len(ss))
-        snps["Winv_ahat"] = ss[args.weights]
-        snps["N"] = ss.N
-        snps["typed"] = snps.Winv_ahat.notnull()
-        if args.chi2_thresh > 0:
-            print("applying chi2 threshold of", args.chi2_thresh)
-            snps.typed &= ss.Winv_ahat_I**2 * ss.N > args.chi2_thresh
-            print(snps.typed.sum(), "typed snps left")
-
-        print("reading annotations")
-        for annot, mynames in annotation_groups:
-            print(time.time() - t0, ": reading annot", annot.filestem())
-            print("adding", mynames)
-            snps = pd.concat([snps, annot.RV_df(c)[mynames]], axis=1)
-            if (~np.isfinite(snps[mynames].values)).sum() > 0:
-                raise ValueError(
-                    "There should be no nans in the postprocessed annotation. But there are " + str((~np.isfinite(snps[mynames].values)).sum())
-                )
-
-        if (np.array(combined_annotation_names) != snps.columns.values[-len(combined_annotation_names) :]).any():
-            raise ValueError("Merged annotations are not in the right order")
-
-        for ldblock, _, meta, _ in refpanel.block_data(
-            ldblocks,
-            c,
-            meta=snps,
-            genos=False,
-            verbose=0,
-        ):
-            if meta is None:
-                raise ValueError("main SLDP regression requires block metadata")
-            r_path = svd_stem / f"{ldblock.name}.R.npz"
-            r2_path = svd_stem / f"{ldblock.name}.R2.npz"
-            if meta.typed.sum() == 0 or not r_path.exists():
-                ldblocks.loc[ldblock.name, "M_H"] = 0
-                continue
-            if (meta[combined_annotation_names] == 0).values.all():
-                ldblocks.loc[ldblock.name, "M_H"] = 0
-                continue
-
-            ldblocks.loc[ldblock.name, "M_H"] = meta.typed.sum()
-            ldblocks.loc[ldblock.name, "snpind_begin"] = min(meta.index)
-            ldblocks.loc[ldblock.name, "snpind_end"] = max(meta.index) + 1
-
-            meta_t = meta[meta.typed.values]
-            N = meta_t.N.mean()
-            if args.weights in {"Winv_ahat_h", "Winv_ahat_hlN"}:
-                R = np.load(r_path)
-                R2 = None
-                if len(R["U"]) != len(meta):
-                    raise ValueError("regression wgts dimension must match regression snps")
-            elif args.weights in {"Winv_ahat_h2", "Winv_ahat"}:
-                R = np.load(r_path)
-                R2 = np.load(r2_path)
-                if len(R["U"]) != len(meta) or len(R2["U"]) != len(meta):
-                    raise ValueError("regression wgts dimension must match regression snps")
-            else:
-                R = None
-                R2 = None
-
-            weighted_rv = weights.invert_weights(
-                R,
-                R2,
-                sigma2g,
-                N,
-                meta[combined_annotation_names].values,
-                typed=meta.typed.values,
-                mode=args.weights,
-            )
-            numerators[ldblock.name] = meta_t[combined_annotation_names].T.dot(meta_t.Winv_ahat).values / 1e6
-            denominators[ldblock.name] = meta_t[combined_annotation_names].T.dot(weighted_rv[meta.typed.values]).values / 1e6
-
-        memo.reset()
-
-    return numerators, denominators, ldblocks
 
 
 def _compute_annotation_result(
@@ -367,263 +233,142 @@ def _compute_annotation_result(
     chunk_denoms: list[np.ndarray],
     loo_nums: list[np.ndarray],
     loo_denoms: list[np.ndarray],
+    rng: np.random.Generator | np.random.RandomState | None = None,
 ) -> AnnotationResult:
     """Compute regression statistics for one marginal annotation."""
 
-    background_count = len(annotation_context.background_names)
-    sqnorm = annotation_context.marginal_infos.loc[name[:-2], "sqnorm"]
-    supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
-    M = annotation_context.marginal_infos.loc[name[:-2], "M"]
-
-    mu = cs.get_est(sum(chunk_nums, np.zeros_like(chunk_nums[0])), sum(chunk_denoms, np.zeros_like(chunk_denoms[0])), index, background_count)
-    q, r, mux, muy = cs.residualize(chunk_nums, chunk_denoms, background_count, index)
-    se = cs.jackknife_se(mu, loo_nums, loo_denoms, index, background_count)
-
-    row: dict[str, float | str] = {
-        "pheno": pheno_name,
-        "annot": name,
-    }
-
-    if args.bothp or not args.fastp:
-        signflip_result = cs.signflip(q, args.T, printmem=True, mode=args.stat)
-        if signflip_result is None:
-            raise ValueError(f"Unsupported signflip mode: {args.stat}")
-        p_emp, z_emp = signflip_result
-        row["z"] = z_emp
-        row["p"] = p_emp
-    if args.bothp or args.fastp:
-        z_fast = np.sum(q) / np.linalg.norm(q)
-        p_fast = st.chi2.sf(z_fast**2, 1)
-        row["z_fast"] = z_fast
-        row["p_fast"] = p_fast
-    if args.fastp and not args.bothp:
-        row["p"] = row["p_fast"]
-        row["z"] = row["z_fast"]
-        del row["p_fast"]
-        del row["z_fast"]
-
-    row["mu"] = mu
-    row["se(mu)"] = se
-    row["h2g"] = h2g
-
-    if args.more_stats:
-        row["qkurtosis"] = st.kurtosis(q)
-        row["qstd"] = np.std(q)
-        row["p_jk"] = st.chi2.sf((mu / se) ** 2, 1)
-        row["sqnorm"] = sqnorm
-
-    rf = mu * np.sqrt(sqnorm / h2g)
-    h2v_over_h2g = rf**2 - se**2 * sqnorm / (M * sigma2g)
-    row["rf"] = rf
-    row["h2v/h2g"] = h2v_over_h2g
-    row["h2v"] = h2v_over_h2g * h2g
-    row["supp(v)/M"] = supp / M
-
-    return AnnotationResult(row=row, q=q, r=r, mux=mux, muy=muy)
+    return compute_annotation_result(
+        args,
+        pheno_name,
+        name,
+        annotation_context,
+        index,
+        h2g,
+        sigma2g,
+        chunk_nums,
+        chunk_denoms,
+        loo_nums,
+        loo_denoms,
+        chunkstats_module=cs,
+        rng=rng,
+    )
 
 
 def _write_verbose_outputs(
-    outfile_stem: str,
-    pheno_name: str,
-    name: str,
-    background_names: list[str],
-    chunkinfo: pd.DataFrame,
-    result: AnnotationResult,
+    outfile_stem: str, pheno_name: str, name: str, background_names: list[str], chunkinfo: pd.DataFrame, result: AnnotationResult
 ) -> None:
-    """Write per-annotation chunk and coefficient outputs for verbose runs."""
-
-    fname = Path(f"{outfile_stem}.{pheno_name}.{name}")
-    print("writing verbose results to", fname)
-    verbose_chunkinfo = chunkinfo.copy()
-    verbose_chunkinfo["q"] = result.q
-    verbose_chunkinfo["r"] = result.r
-    verbose_chunkinfo.to_csv(f"{fname}.chunks", sep="\t", index=False)
-
-    coeffs = pd.DataFrame({"annot": background_names, "mux": result.mux, "muy": result.muy})
-    coeffs.to_csv(f"{fname}.coeffs", sep="\t", index=False)
+    write_verbose_outputs(outfile_stem, pheno_name, name, background_names, chunkinfo, result)
 
 
 def _processed_pss_path(args: argparse.Namespace) -> str:
-    """Return the processed phenotype directory used by the main regression."""
-
-    if args.pss_chr is not None:
-        return args.pss_chr
-    if args.sumstats_stem is None:
-        raise ValueError("Either --pss-chr or --sumstats-stem must be supplied")
-    return args.sumstats_stem + "." + args.refpanel_name + "/"
+    return _processed_pss_path_impl(args)
 
 
 def _missing_pheno_artifacts(args: argparse.Namespace) -> list[str]:
-    """List missing processed phenotype artifacts required for the requested run."""
-
-    pss_chr = _processed_pss_path(args)
-    missing = [f"{pss_chr}info"] if not os.path.exists(f"{pss_chr}info") else []
-    missing.extend(f"{pss_chr}{chrom}.pss.gz" for chrom in args.chroms if not os.path.exists(f"{pss_chr}{chrom}.pss.gz"))
-    return missing
+    return _missing_pheno_artifacts_impl(args, path_exists=os.path.exists)
 
 
 def _missing_annotation_artifacts(args: argparse.Namespace) -> dict[str, list[str]]:
-    """List missing processed annotation artifacts keyed by annotation stem."""
-
-    missing: dict[str, list[str]] = {}
-    for sannot in args.sannot_chr + args.background_sannot_chr:
-        missing_paths: list[str] = []
-        for chrom in args.chroms:
-            rv_path = sannot + str(chrom) + ".RV.gz"
-            info_path = sannot + str(chrom) + ".info"
-            if not os.path.exists(rv_path):
-                missing_paths.append(rv_path)
-            if not os.path.exists(info_path):
-                missing_paths.append(info_path)
-        if missing_paths:
-            missing[sannot] = missing_paths
-    return missing
+    return _missing_annotation_artifacts_impl(args, path_exists=os.path.exists)
 
 
 def _format_missing_message(header: str, missing: list[str], hint: str | None = None) -> str:
-    """Build a compact missing-artifact error message."""
-
-    shown = ", ".join(missing[:3])
-    suffix = "" if len(missing) <= 3 else f", and {len(missing) - 3} more"
-    message = f"{header}: {shown}{suffix}."
-    if hint is not None:
-        message += f" {hint}"
-    return message
+    return _format_missing_message_impl(header, missing, hint)
 
 
 def _ensure_processed_inputs(args: argparse.Namespace) -> None:
-    """Validate processed inputs or optionally preprocess only missing artifacts."""
+    _ensure_processed_inputs_impl(
+        args,
+        preprocess_sumstats_fn=preprocess_sumstats,
+        preprocess_sannots_fn=preprocess_sannots,
+        path_exists=os.path.exists,
+    )
 
-    missing_pheno = _missing_pheno_artifacts(args)
-    missing_annots = _missing_annotation_artifacts(args)
-    if not missing_pheno and not missing_annots:
-        if args.pss_chr is None:
-            args.pss_chr = _processed_pss_path(args)
-            args.sumstats_stem = None
-        return
 
-    if not args.preprocess:
-        if missing_pheno:
-            raise ValueError(
-                _format_missing_message(
-                    "Missing processed phenotype artifacts",
-                    missing_pheno,
-                    "Rerun with --preprocess and --config to build only the missing files.",
-                )
-            )
-        first_annot = next(iter(missing_annots.values()))
-        raise ValueError(
-            _format_missing_message(
-                "Missing processed annotation artifacts",
-                first_annot,
-                "Rerun with --preprocess and --config to build only the missing files.",
-            )
-        )
-
-    if missing_pheno and args.pss_chr is not None and args.sumstats_stem is None:
-        raise ValueError(
-            _format_missing_message(
-                "Missing processed phenotype artifacts",
-                missing_pheno,
-                "Cannot rebuild them from --pss-chr alone. Rerun with --sumstats-stem, --preprocess, and --config.",
-            )
-        )
-
-    preprocess_sumstats(args)
-    preprocess_sannots(args)
-
-    remaining_pheno = _missing_pheno_artifacts(args)
-    remaining_annots = _missing_annotation_artifacts(args)
-    if remaining_pheno:
-        raise ValueError(_format_missing_message("Processed phenotype artifacts are still missing after preprocessing", remaining_pheno))
-    if remaining_annots:
-        first_annot = next(iter(remaining_annots.values()))
-        raise ValueError(_format_missing_message("Processed annotation artifacts are still missing after preprocessing", first_annot))
+def _load_ldblocks(path: str) -> pd.DataFrame:
+    return load_ldblocks(path)
 
 
 def run(args: argparse.Namespace) -> None:
     """Execute SLDP regression from a parsed argument namespace."""
 
-    _ensure_processed_inputs(args)
+    with memo.cache_scope():
+        _ensure_processed_inputs(args)
 
-    print("initializing...")
+        print("initializing...")
 
-    refpanel = gd.Dataset(args.bfile_reg_chr)
-    outfile_path = Path(args.outfile_stem)
-    if args.seed is not None:
-        np.random.seed(args.seed)
-        print("random seed:", args.seed)
+        refpanel = gd.Dataset(args.bfile_reg_chr)
+        outfile_path = Path(args.outfile_stem)
+        rng: np.random.Generator | np.random.RandomState | None = None
+        if args.seed is not None:
+            rng = np.random.RandomState(args.seed)
+            print("random seed:", args.seed)
 
-    annotation_context = _build_annotation_context(args)
-    print("background annotations:", annotation_context.background_names)
-    print("marginal annotations:", annotation_context.marginal_names)
+        annotation_context = _build_annotation_context(args)
+        print("background annotations:", annotation_context.background_names)
+        print("marginal annotations:", annotation_context.marginal_names)
 
-    pheno_name, sigma2g, h2g = _load_trait_info(args.pss_chr)
-    ldblocks = _load_ldblocks(args.ld_blocks)
-    numerators, denominators, ldblocks = _collect_block_statistics(
-        args,
-        refpanel,
-        ldblocks,
-        annotation_context,
-        sigma2g,
-    )
-
-    # get data for jackknifing
-    print("jackknifing")
-    chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = cs.collapse_to_chunks(ldblocks, numerators, denominators, args.jk_blocks)
-
-    # compute final results
-    result_rows: list[dict[str, float | str]] = []
-    for i, name in enumerate(annotation_context.marginal_names):
-        print(i, name)
-        annotation_result = _compute_annotation_result(
-            args=args,
-            pheno_name=pheno_name,
-            name=name,
-            annotation_context=annotation_context,
-            index=i,
-            h2g=h2g,
-            sigma2g=sigma2g,
-            chunk_nums=chunk_nums,
-            chunk_denoms=chunk_denoms,
-            loo_nums=loo_nums,
-            loo_denoms=loo_denoms,
+        pheno_name, sigma2g, h2g = _load_trait_info(args.pss_chr)
+        ldblocks = load_ldblocks(args.ld_blocks)
+        numerators, denominators, ldblocks = _collect_block_statistics(
+            args,
+            refpanel,
+            ldblocks,
+            annotation_context,
+            sigma2g,
         )
-        result_rows.append(annotation_result.row)
-        current_p = float(annotation_result.row["p"])
 
-        # print verbose information if required
-        if current_p < args.verbose_thresh:
-            _write_verbose_outputs(
-                outfile_stem=args.outfile_stem,
+        print("jackknifing")
+        chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = cs.collapse_to_chunks(ldblocks, numerators, denominators, args.jk_blocks)
+
+        result_rows: list[dict[str, float | str]] = []
+        for i, name in enumerate(annotation_context.marginal_names):
+            print(i, name)
+            annotation_result = _compute_annotation_result(
+                args=args,
                 pheno_name=pheno_name,
                 name=name,
-                background_names=annotation_context.background_names,
-                chunkinfo=chunkinfo,
-                result=annotation_result,
+                annotation_context=annotation_context,
+                index=i,
+                h2g=h2g,
+                sigma2g=sigma2g,
+                chunk_nums=chunk_nums,
+                chunk_denoms=chunk_denoms,
+                loo_nums=loo_nums,
+                loo_denoms=loo_denoms,
+                rng=rng,
             )
+            result_rows.append(annotation_result.row)
+            current_p = float(annotation_result.row["p"])
 
-        # nominate interesting loci if desired
-        if current_p < args.tell_me_stories:
-            storyteller.write(
-                f"{outfile_path}.{name}.loci",
-                args,
-                name,
-                annotation_context.background_names,
-                annotation_result.mux,
-                annotation_result.muy,
-                float(annotation_result.row["z"]),
-                corr_thresh=args.story_corr_thresh,
-            )
+            if current_p < args.verbose_thresh:
+                _write_verbose_outputs(
+                    outfile_stem=args.outfile_stem,
+                    pheno_name=pheno_name,
+                    name=name,
+                    background_names=annotation_context.background_names,
+                    chunkinfo=chunkinfo,
+                    result=annotation_result,
+                )
 
-    results = pd.DataFrame(result_rows)
-    gwresults_path = outfile_path.with_name(outfile_path.name + ".gwresults")
-    results.to_csv(gwresults_path, sep="\t", index=False, na_rep="nan")
+            if current_p < args.tell_me_stories:
+                storyteller.write(
+                    str(Path(f"{outfile_path}.{name}.loci")),
+                    args,
+                    name,
+                    annotation_context.background_names,
+                    annotation_result.mux,
+                    annotation_result.muy,
+                    float(annotation_result.row["z"]),
+                    corr_thresh=args.story_corr_thresh,
+                )
 
-    print(results)
-    print("writing results to", gwresults_path)
-    results.to_csv(gwresults_path, sep="\t", index=False, na_rep="nan")
-    print("done")
+        results = pd.DataFrame(result_rows)
+        gwresults_path = outfile_path.with_name(outfile_path.name + ".gwresults")
+        print(results)
+        print("writing results to", gwresults_path)
+        results.to_csv(gwresults_path, sep="\t", index=False, na_rep="nan")
+        print("done")
 
 
 def main() -> None:
@@ -640,69 +385,12 @@ def main() -> None:
     run(args)
 
 
-# preprocess any sumstats that need preprocessing
 def preprocess_sumstats(args: argparse.Namespace) -> None:
-    if args.pss_chr is None:
-        unprocessed_chroms = [c for c in args.chroms if not os.path.exists(args.sumstats_stem + "." + args.refpanel_name + "/" + str(c) + ".pss.gz")]
-        if len(unprocessed_chroms) > 0:
-            print(
-                "Preprocessing",
-                args.sumstats_stem + ".sumstats.gz... at",
-                unprocessed_chroms,
-            )
-            if args.config is None:
-                raise ValueError(
-                    "automatic pre-processing of a sumstats file requires "
-                    + "specification of a config file; otherwise I dont know what "
-                    + "parameters to use. If you want, you can preprocess the sumstats "
-                    + "without a config file by running preprocesspheno manually"
-                )
-            print("Using config file", args.config, "and default options")
-
-            # run the command
-            import copy
-            import sldp.preprocesspheno
-
-            args_ = copy.copy(args)
-            args_.no_M_5_50 = False
-            args_.set_h2g = None
-            args_.chroms = unprocessed_chroms
-            sldp.preprocesspheno.run(args_)
-
-        # modify args to reflect existing of pss-chr files
-        args.pss_chr = args.sumstats_stem + "." + args.refpanel_name + "/"
-        args.sumstats_stem = None
-        print("== finished preprocessing sumstats ==")
+    _preprocess_sumstats_impl(args, path_exists=os.path.exists)
 
 
-# preprocess any annotations that need preprocessing
 def preprocess_sannots(args: argparse.Namespace) -> None:
-    for sannot in args.sannot_chr:
-        unprocessed_chroms = [
-            c for c in args.chroms if not (os.path.exists(sannot + str(c) + ".RV.gz") and os.path.exists(sannot + str(c) + ".info"))
-        ]
-        if len(unprocessed_chroms) > 0:
-            print("Preprocessing", sannot, "at chromosomes", unprocessed_chroms)
-            if args.config is None:
-                raise ValueError(
-                    "automatic pre-processing of an annotation "
-                    + "requires specification of a config file; otherwise I dont know what "
-                    + "parameters to use. If you want, you can preprocess the annotation "
-                    + "without a config file by running preprocessannot manually"
-                )
-            print("Using config file", args.config, "and default options")
-
-            # run preprocessing command
-            import copy
-            import sldp.preprocessannot
-
-            args_ = copy.copy(args)
-            args_.alpha = -1
-            args_.sannot_chr = [sannot]
-            args_.chroms = unprocessed_chroms
-            sldp.preprocessannot.run(args_)
-
-            print("== finished preprocessing annotation", sannot)
+    _preprocess_sannots_impl(args, path_exists=os.path.exists)
 
 
 if __name__ == "__main__":

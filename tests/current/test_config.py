@@ -8,9 +8,7 @@ from sldp.config import add_default_params
 
 
 class TestAddDefaultParams:
-    def test_add_default_params_merges_config_and_cli_values(
-        self, tmp_path: Path
-    ) -> None:
+    def test_add_default_params_merges_config_and_cli_values(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.json"
         config_path.write_text(
             json.dumps(

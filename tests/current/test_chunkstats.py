@@ -23,9 +23,7 @@ class TestJackknifeSe:
         loo_nums = [np.array([2.0]), np.array([2.0]), np.array([2.0])]
         loo_denoms = [np.array([[1.0]]), np.array([[1.0]]), np.array([[1.0]])]
 
-        result = chunkstats.jackknife_se(
-            2.0, loo_nums, loo_denoms, k=0, num_background=0
-        )
+        result = chunkstats.jackknife_se(2.0, loo_nums, loo_denoms, k=0, num_background=0)
 
         assert result == 0.0
 
@@ -35,9 +33,7 @@ class TestResidualize:
         chunk_nums = [np.array([1.0]), np.array([3.0])]
         chunk_denoms = [np.array([[2.0]]), np.array([[4.0]])]
 
-        q, r, mux, muy = chunkstats.residualize(
-            chunk_nums, chunk_denoms, num_background=0, k=0
-        )
+        q, r, mux, muy = chunkstats.residualize(chunk_nums, chunk_denoms, num_background=0, k=0)
 
         np.testing.assert_array_equal(q, np.array([1.0, 3.0]))
         np.testing.assert_array_equal(r, np.array([2.0, 4.0]))
@@ -60,13 +56,11 @@ class TestCollapseToChunks:
         numerators = {0: np.array([1.0]), 2: np.array([4.0])}
         denominators = {0: np.array([[2.0]]), 2: np.array([[5.0]])}
 
-        chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = (
-            chunkstats.collapse_to_chunks(
-                ldblocks,
-                numerators,
-                denominators,
-                numblocks=2,
-            )
+        chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = chunkstats.collapse_to_chunks(
+            ldblocks,
+            numerators,
+            denominators,
+            numblocks=2,
         )
 
         assert len(chunk_nums) == 2

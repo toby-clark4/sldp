@@ -13,23 +13,8 @@ import sldp.config as config
 import sldp.dataset as gd
 import sldp.memo as memo
 import sldp.pretty as pretty
-
-
-def _load_ldblocks(path: str) -> pd.DataFrame:
-    """Load LD blocks and drop blocks overlapping the MHC region."""
-
-    mhc_bp = [25684587, 35455756]
-    ldblocks = pd.read_csv(path, sep=r"\s+", header=None, names=["chr", "start", "end"])
-    mhcblocks = (ldblocks.chr == "chr6") & (ldblocks.end > mhc_bp[0]) & (ldblocks.start < mhc_bp[1])
-    return ldblocks[~mhcblocks]
-
-
-def _load_print_snps(path: str) -> pd.DataFrame:
-    """Load the set of SNPs that should be retained in outputs."""
-
-    print_snps = pd.read_csv(path, header=None, names=["SNP"])
-    print_snps["printsnp"] = True
-    return print_snps
+from sldp.workflow_io import load_ldblocks as _load_ldblocks
+from sldp.workflow_io import load_print_snps as _load_print_snps
 
 
 def _prepare_chromosome_annotation(
@@ -130,27 +115,28 @@ def _write_rv_output(snps: pd.DataFrame, names: list[str], result_names: list[st
 def run(args: argparse.Namespace) -> None:
     """Preprocess signed annotations into LD-profile tables by chromosome."""
 
-    print("initializing...")
+    with memo.cache_scope():
+        print("initializing...")
 
-    refpanel = gd.Dataset(args.bfile_chr)
-    annots = [ga.Annotation(annot) for annot in args.sannot_chr]
-    ldblocks = _load_ldblocks(args.ld_blocks)
-    print(len(ldblocks), "loci after removing MHC")
-    print_snps = _load_print_snps(args.print_snps)
-    print(len(print_snps), "print snps")
+        refpanel = gd.Dataset(args.bfile_chr)
+        annots = [ga.Annotation(annot) for annot in args.sannot_chr]
+        ldblocks = _load_ldblocks(args.ld_blocks)
+        print(len(ldblocks), "loci after removing MHC")
+        print_snps = _load_print_snps(args.print_snps)
+        print(len(print_snps), "print snps")
 
-    for annot in annots:
-        t0 = time.time()
-        for c in args.chroms:
-            print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-            snps, names, result_names = _prepare_chromosome_annotation(refpanel, annot, c, print_snps, args.alpha)
-            _write_annotation_info(snps, names, annot.info_filename(c))
-            _compute_rv_values(refpanel, ldblocks, c, snps, names, result_names)
-            _write_rv_output(snps, names, result_names, Path(annot.RV_filename(c)))
+        for annot in annots:
+            t0 = time.time()
+            for c in args.chroms:
+                print(time.time() - t0, ": loading chr", c, "of", args.chroms)
+                snps, names, result_names = _prepare_chromosome_annotation(refpanel, annot, c, print_snps, args.alpha)
+                _write_annotation_info(snps, names, annot.info_filename(c))
+                _compute_rv_values(refpanel, ldblocks, c, snps, names, result_names)
+                _write_rv_output(snps, names, result_names, Path(annot.RV_filename(c)))
 
-            del snps
-            memo.reset()
-            gc.collect()
+                del snps
+                memo.reset()
+                gc.collect()
 
     print("done")
 

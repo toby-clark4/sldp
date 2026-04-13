@@ -55,6 +55,20 @@ conda run -n sldp python -m mypy src
 conda run -n sldp python -m pytest
 ```
 
+To run the live installed-package parity check explicitly:
+
+```bash
+conda run -n sldp python -m pytest -m live_baseline tests/equivalence
+```
+
+To time the canonical tiny-fixture workflow from this checkout:
+
+```bash
+conda run -n sldp python scripts/benchmark_phase1.py
+```
+
+This benchmark copies `tests/fixtures/phase1_tiny/` to a temporary directory, runs the four core commands with `PYTHONPATH=src`, and prints per-step timings plus the total runtime.
+
 
 ## Where can I get signed LD profiles?
 
