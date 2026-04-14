@@ -34,6 +34,12 @@ def _svd_output_path(svd_stem: str | Path, block_name: int, suffix: str) -> Path
     return Path(f"{svd_stem}{block_name}.{suffix}.npz")
 
 
+def _truncated_rank(singular_values: np.ndarray, spectrum_percent: float) -> int:
+    """Return the retained rank under the workflow's cumulative-spectrum rule."""
+
+    return int(np.argmax(np.cumsum(singular_values) / singular_values.sum() >= spectrum_percent / 100.0))
+
+
 def _prepare_chromosome_snps(refpanel: gd.Dataset, chrom: int, print_snps: pd.DataFrame) -> pd.DataFrame:
     """Load chromosome metadata and mark the printed SNP subset."""
 
@@ -49,17 +55,15 @@ def _save_block_svds(X_print: np.ndarray, block_name: int, svd_stem: str | Path,
 
     print("\tcomputing SVD of R_print")
     U_, svs_ = _best_svd(X_print)
-    k = np.argmax(np.cumsum(svs_) / svs_.sum() >= spectrum_percent / 100.0)
+    k = _truncated_rank(svs_, spectrum_percent)
     print("\treduced rank of", k, "out of", num_print_snps, "printed snps")
     np.savez(_svd_output_path(svd_stem, block_name, "R"), U=U_[:, :k], svs=svs_[:k])
 
-    print("\tcomputing R2_print")
-    r2 = X_print.T.dot(X_print.dot(X_print.T)).dot(X_print) / X_print.shape[0] ** 2
-    print("\tcomputing SVD of R2_print")
-    r2_u, r2_svs, _ = np.linalg.svd(r2)
-    k = np.argmax(np.cumsum(r2_svs) / r2_svs.sum() >= spectrum_percent / 100.0)
+    print("\tderiving R2_print spectrum from R_print SVD")
+    r2_svs = svs_**2
+    k = _truncated_rank(r2_svs, spectrum_percent)
     print("\treduced rank of", k, "out of", num_print_snps, "printed snps")
-    np.savez(_svd_output_path(svd_stem, block_name, "R2"), U=r2_u[:, :k], svs=r2_svs[:k])
+    np.savez(_svd_output_path(svd_stem, block_name, "R2"), U=U_[:, :k], svs=r2_svs[:k])
 
 
 def build_parser() -> argparse.ArgumentParser:

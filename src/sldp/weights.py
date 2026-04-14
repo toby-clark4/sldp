@@ -1,6 +1,14 @@
 import numpy as np
 
 
+def _apply_spectral_inverse(U: np.ndarray, diagonal: np.ndarray, x_typed: np.ndarray) -> np.ndarray:
+    """Apply `U diag(diagonal)^{-1} U^T` to typed values."""
+
+    projection = U.T @ x_typed
+    scaling = diagonal[:, None] if projection.ndim > 1 else diagonal
+    return U @ (projection / scaling)
+
+
 # R: SVD of (R, restricted to regression SNPs)
 # R2: SVD of (R^2, restricted to regression SNPs)
 def invert_weights(
@@ -25,19 +33,19 @@ def invert_weights(
         U = R["U"][typed, :]
         svs = R["svs"]
         result = np.full(x.shape, np.nan)
-        result[typed] = (U / (svs**2)).dot(U.T.dot(x[typed]))
+        result[typed] = _apply_spectral_inverse(U, svs**2, x[typed])
     # heuristic, no large N approximation, using (R_o)^2 to approximate (R2)_o
     elif mode == "Winv_ahat_h":
         U = R["U"][typed, :]
         svs = R["svs"]
         result = np.full(x.shape, np.nan)
-        result[typed] = (U / (sigma2g * svs**2 + svs / N)).dot(U.T.dot(x[typed]))
+        result[typed] = _apply_spectral_inverse(U, sigma2g * svs**2 + svs / N, x[typed])
     # heuristic, no large N approximation, using R2 instead of R
     elif mode == "Winv_ahat_h2":
         U = R2["U"][typed, :]
         svs = R2["svs"]
         result = np.full(x.shape, np.nan)
-        result[typed] = (U / (sigma2g * svs + np.sqrt(svs) / N)).dot(U.T.dot(x[typed]))
+        result[typed] = _apply_spectral_inverse(U, sigma2g * svs + np.sqrt(svs) / N, x[typed])
     # exact
     elif mode == "Winv_ahat":
         R_ = (R["U"][typed] * R["svs"]).dot(R["U"][typed].T)
@@ -50,5 +58,5 @@ def invert_weights(
         U = U[:, :k]
         svs = svs[:k]
         result = np.full(x.shape, np.nan)
-        result[typed] = (U / svs).dot(U.T.dot(x[typed]))
+        result[typed] = _apply_spectral_inverse(U, svs, x[typed])
     return result

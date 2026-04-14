@@ -117,14 +117,20 @@ def collect_block_statistics(
             print(snps.typed.sum(), "typed snps left")
 
         print("reading annotations")
+        annotation_frames: list[pd.DataFrame] = []
         for annot, mynames in annotation_groups:
             print(time.time() - t0, ": reading annot", annot.filestem())
             print("adding", mynames)
-            snps = pd.concat([snps, annot.RV_df(c)[mynames]], axis=1)
-            if (~np.isfinite(snps[mynames].values)).sum() > 0:
+            annotation_frame = annot.RV_df(c)[mynames]
+            annotation_values = annotation_frame.to_numpy(copy=False)
+            if (~np.isfinite(annotation_values)).sum() > 0:
                 raise ValueError(
-                    "There should be no nans in the postprocessed annotation. But there are " + str((~np.isfinite(snps[mynames].values)).sum())
+                    "There should be no nans in the postprocessed annotation. But there are " + str((~np.isfinite(annotation_values)).sum())
                 )
+            annotation_frames.append(annotation_frame)
+
+        if annotation_frames:
+            snps = pd.concat([snps, *annotation_frames], axis=1)
 
         if (np.array(combined_annotation_names) != snps.columns.values[-len(combined_annotation_names) :]).any():
             raise ValueError("Merged annotations are not in the right order")
@@ -198,23 +204,25 @@ def _compute_block_statistics(
     typed_count = int(meta.typed.sum())
     if typed_count == 0 or not r_path.exists():
         return None
-    if (meta[combined_annotation_names] == 0).values.all():
+    annotation_values = meta.loc[:, combined_annotation_names].to_numpy(copy=False)
+    if (annotation_values == 0).all():
         return None
 
-    meta_t = meta[meta.typed.values]
-    sample_size = meta_t.N.mean()
+    typed_mask = meta.typed.to_numpy(copy=False)
+    typed_annotation_values = annotation_values[typed_mask]
+    sample_size = meta.loc[typed_mask, "N"].mean()
     r, r2 = _load_regression_weights(weights_mode, r_path, r2_path, len(meta))
     weighted_rv = weights_module.invert_weights(
         r,
         r2,
         sigma2g,
         sample_size,
-        meta[combined_annotation_names].values,
-        typed=meta.typed.values,
+        annotation_values,
+        typed=typed_mask,
         mode=weights_mode,
     )
-    numerator = meta_t[combined_annotation_names].T.dot(meta_t.Winv_ahat).values / 1e6
-    denominator = meta_t[combined_annotation_names].T.dot(weighted_rv[meta.typed.values]).values / 1e6
+    numerator = typed_annotation_values.T @ meta.loc[typed_mask, "Winv_ahat"].to_numpy(copy=False) / 1e6
+    denominator = typed_annotation_values.T @ weighted_rv[typed_mask] / 1e6
     return ldblock_name, numerator, denominator, typed_count, min(meta.index), max(meta.index) + 1
 
 
@@ -250,6 +258,8 @@ def compute_annotation_result(
     sigma2g: float,
     chunk_nums: list[np.ndarray],
     chunk_denoms: list[np.ndarray],
+    total_chunk_num: np.ndarray,
+    total_chunk_denom: np.ndarray,
     loo_nums: list[np.ndarray],
     loo_denoms: list[np.ndarray],
     *,
@@ -264,10 +274,15 @@ def compute_annotation_result(
     supp = annotation_context.marginal_infos.loc[name[:-2], "supp"]
     total_snps = annotation_context.marginal_infos.loc[name[:-2], "M"]
 
-    mu = chunkstats_module.get_est(
-        sum(chunk_nums, np.zeros_like(chunk_nums[0])), sum(chunk_denoms, np.zeros_like(chunk_denoms[0])), index, background_count
+    mu = chunkstats_module.get_est(total_chunk_num, total_chunk_denom, index, background_count)
+    q, r, mux, muy = chunkstats_module.residualize(
+        chunk_nums,
+        chunk_denoms,
+        background_count,
+        index,
+        total_num=total_chunk_num,
+        total_denom=total_chunk_denom,
     )
-    q, r, mux, muy = chunkstats_module.residualize(chunk_nums, chunk_denoms, background_count, index)
     se = chunkstats_module.jackknife_se(mu, loo_nums, loo_denoms, index, background_count)
 
     row: dict[str, float | str] = {

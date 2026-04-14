@@ -252,6 +252,175 @@ conda run -n sldp python -m pytest
 5. Phase E as gaps become clearer during B-D.
 6. Phase F in parallel with or immediately after A-E.
 
+## Performance Optimization Track
+
+This track starts after the maintainability-and-equivalence work above. The goal is to preserve mathematical equivalence to the original package while improving wall-clock runtime in the local implementation before any parallelization work.
+
+### Optimization Baselines
+
+Two separate execution environments should be used throughout this track:
+
+1. **Equivalence baseline**
+   - Use the existing system Conda environment that contains the original `sldp` package.
+   - All correctness and equivalence checks should run against this environment.
+   - Command shape:
+   ```bash
+   conda run -n sldp <COMMAND>
+   ```
+
+2. **Performance benchmark environment**
+   - Use the repository-local virtual environment managed with `uv`.
+   - Install the current checkout into that environment before collecting performance numbers.
+   - Setup commands:
+   ```bash
+   if [ ! -d .venv ]; then uv venv .venv; fi
+   source .venv/bin/activate && uv sync --group dev
+   source .venv/bin/activate && uv pip install -e .
+   ```
+   - This environment is the source of the before/after timing comparisons for each optimization.
+
+The equivalence baseline and the performance benchmark environment must remain conceptually separate. The original package in Conda is the correctness reference. The local `uv` environment is the measured implementation.
+
+### Benchmarking Workflow
+
+Before implementing the first optimization:
+
+1. Create or refresh the local `.venv` with `uv`.
+2. Install the current checkout into `.venv` with `uv pip install -e .`.
+3. Run the phase-1 tiny-fixture benchmark in the local `.venv`.
+4. Save the results as the pre-optimization local performance baseline.
+
+After each optimization:
+
+1. Reinstall or refresh the local editable package in `.venv` if needed.
+2. Run focused tests for the touched module(s).
+3. Run equivalence tests against the original package in the Conda environment.
+4. Rerun the phase-1 tiny-fixture benchmark in `.venv`.
+5. Compare benchmark output to:
+   - the initial pre-optimization local baseline
+   - the immediately previous optimization step
+6. Record the delta before moving to the next optimization.
+
+### Benchmark Harness Requirements
+
+The existing tiny-fixture benchmark script should be extended rather than replaced.
+
+Required behavior:
+
+1. Reuse the canonical four-stage pipeline on a copied temp fixture:
+   - `preprocessrefpanel`
+   - `preprocessannot`
+   - `preprocesspheno`
+   - `sldp`
+2. Support benchmarking the package installed in the local `.venv`.
+3. Preserve the current readable console timing summary.
+4. Add machine-readable output, preferably JSON.
+5. Record at minimum:
+   - environment label
+   - timestamp
+   - per-step elapsed seconds
+   - total elapsed seconds
+   - benchmark command mode
+   - local git revision when available
+6. Make it easy to save results under a dedicated benchmark-results location.
+
+Suggested benchmark modes:
+
+1. `local-installed`
+   - Run the commands exposed by the package installed into `.venv`.
+2. optional later: `repo-source`
+   - Run via `PYTHONPATH=src` for developer comparisons.
+
+The priority for this track is `local-installed`, because the goal is to show performance improvement of the local package before and after each optimization.
+
+### Validation Loop Per Optimization
+
+Every optimization step must follow this order:
+
+1. Update code for a single optimization only.
+2. Run focused unit tests for the touched module(s).
+3. Run:
+   ```bash
+   source .venv/bin/activate && pytest tests/equivalence/test_phase1_regression.py
+   ```
+4. Run:
+   ```bash
+   conda run -n sldp python -m pytest -m live_baseline tests/equivalence
+   ```
+5. Run the local `.venv` benchmark and save the result artifact.
+6. Compare current timing against prior saved timing results.
+7. Only continue if equivalence still holds.
+
+### Optimization Sequence
+
+Optimizations should be implemented in the following order.
+
+#### Step 1: `preprocessrefpanel` `R2` Derivation
+
+- Target: `src/sldp/preprocessrefpanel.py`
+- Replace explicit construction and SVD of `R2` with a mathematically equivalent derivation from the existing `R` eigendecomposition.
+- Preserve the existing `.npz` output contract.
+- Rationale: highest expected wall-clock improvement with localized change.
+
+#### Step 2: Chunk Collapse And Leave-One-Out Reuse
+
+- Target: `src/sldp/chunkstats.py`
+- Replace repeated summation and quadratic leave-one-out recomputation with precomputed totals and subtraction.
+- Rationale: low-risk win in core analysis bookkeeping.
+
+#### Step 3: Precompute Global Chunk Totals Once Per Run
+
+- Target: `src/sldp/_regression_workflow.py`
+- Compute full chunk numerator and denominator totals once outside the marginal-annotation loop.
+- Reuse them in effect estimation and residualization.
+- Rationale: removes repeated work from the analysis hot path.
+
+#### Step 4: Move Regression Inner Loops Toward NumPy Arrays
+
+- Target: `src/sldp/_regression_workflow.py`
+- Keep dataframe-based loading and alignment where convenient.
+- Convert hot-path inner-loop math to NumPy arrays after alignment.
+- Reduce repeated dataframe slicing, transposition, and `.values` extraction in block-level regression calculations.
+- Rationale: broader refactor is acceptable here if it materially simplifies and speeds up the block workflow while preserving behavior.
+
+#### Step 5: Reduce RV Computation Overhead In `preprocessannot`
+
+- Target: `src/sldp/preprocessannot.py`
+- Reduce large temporary matrix products in RV computation while preserving exact outputs.
+- Consider better multiply ordering or chunked column processing if needed.
+- Rationale: likely preprocessing hotspot for larger annotation sets.
+
+#### Step 6: Vectorize Allele Reconciliation Checks
+
+- Target: `src/sldp/annotation.py`
+- Replace row-wise Python `apply` logic used for allele matching and flipping with vectorized membership checks.
+- Preserve exact mismatch, missingness, and sign-flip behavior.
+- Rationale: reliable preprocessing/runtime improvement at low risk.
+
+### Benchmark Reporting
+
+Each optimization step should produce a comparison summary containing:
+
+1. optimization step name
+2. pre-optimization local baseline time
+3. previous-step local time
+4. current local time
+5. absolute delta vs previous step
+6. percent delta vs previous step
+7. absolute delta vs initial local baseline
+8. percent delta vs initial local baseline
+
+This report should include both per-stage timings and total runtime. Raw JSON outputs should be retained so the performance story is reproducible.
+
+### Documentation Deliverables
+
+The performance track is complete only when the repository includes:
+
+1. a documented `uv`-based local benchmark setup
+2. a benchmark script that emits readable and machine-readable results
+3. instructions for running the Conda-based equivalence checks against the original package
+4. a clear record of before/after local package performance improvements across the implemented optimizations
+
 ## Definition Of Done For This Refactor Track
 
 The maintainability-and-equivalence track should be considered complete when all of the following are true:

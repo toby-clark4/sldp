@@ -8,6 +8,12 @@ import scipy.stats as st
 import sldp.fs as fs
 
 
+def _sum_arrays(arrays: list[np.ndarray]) -> np.ndarray:
+    """Return the elementwise sum of equally shaped arrays."""
+
+    return np.sum(np.stack(arrays), axis=0)
+
+
 # make idependent blocks
 def collapse_to_chunks(
     ldblocks: pd.DataFrame,
@@ -39,30 +45,34 @@ def collapse_to_chunks(
     # collapse data within chunks
     chunk_nums: list[np.ndarray] = []
     chunk_denoms: list[np.ndarray] = []
+    chunkinfo_rows: list[dict[str, float | str]] = []
     for n, (i, j) in enumerate(zip(chunkendpoints[:-1], chunkendpoints[1:])):
+        del n
         ldblock_ind = [ldblock for ldblock in ldblocks.iloc[i:j].index if ldblock in numerators.keys()]
         if len(ldblock_ind) > 0:
-            chunk_nums.append(sum((numerators[ldblock] for ldblock in ldblock_ind), np.zeros_like(numerators[ldblock_ind[0]])))
-            chunk_denoms.append(sum((denominators[ldblock] for ldblock in ldblock_ind), np.zeros_like(denominators[ldblock_ind[0]])))
-            newrow_chunkinfo = {
-                "ldblock_begin": min(ldblock_ind),
-                "ldblock_end": max(ldblock_ind) + 1,
-                "chr_begin": ldblocks.loc[min(ldblock_ind), "chr"],
-                "chr_end": ldblocks.loc[max(ldblock_ind), "chr"],
-                "bp_begin": ldblocks.loc[min(ldblock_ind), "start"],
-                "bp_end": ldblocks.loc[max(ldblock_ind), "end"],
-                "snpind_begin": ldblocks.loc[min(ldblock_ind), "snpind_begin"],
-                "snpind_end": ldblocks.loc[max(ldblock_ind), "snpind_end"],
-                "numsnps": sum(ldblocks.loc[ldblock_ind, "M_H"]),
-            }
-            chunkinfo = pd.concat([chunkinfo, pd.DataFrame([newrow_chunkinfo])], ignore_index=True)
+            chunk_nums.append(_sum_arrays([numerators[ldblock] for ldblock in ldblock_ind]))
+            chunk_denoms.append(_sum_arrays([denominators[ldblock] for ldblock in ldblock_ind]))
+            chunkinfo_rows.append(
+                {
+                    "ldblock_begin": min(ldblock_ind),
+                    "ldblock_end": max(ldblock_ind) + 1,
+                    "chr_begin": ldblocks.loc[min(ldblock_ind), "chr"],
+                    "chr_end": ldblocks.loc[max(ldblock_ind), "chr"],
+                    "bp_begin": ldblocks.loc[min(ldblock_ind), "start"],
+                    "bp_end": ldblocks.loc[max(ldblock_ind), "end"],
+                    "snpind_begin": ldblocks.loc[min(ldblock_ind), "snpind_begin"],
+                    "snpind_end": ldblocks.loc[max(ldblock_ind), "snpind_end"],
+                    "numsnps": sum(ldblocks.loc[ldblock_ind, "M_H"]),
+                }
+            )
+
+    chunkinfo = pd.DataFrame(chunkinfo_rows)
 
     ## compute leave-one-out sums
-    loonumerators: list[np.ndarray] = []
-    loodenominators: list[np.ndarray] = []
-    for i in range(len(chunk_nums)):
-        loonumerators.append(sum(chunk_nums[:i] + chunk_nums[(i + 1) :], np.zeros_like(chunk_nums[0])))
-        loodenominators.append(sum(chunk_denoms[:i] + chunk_denoms[(i + 1) :], np.zeros_like(chunk_denoms[0])))
+    total_num = _sum_arrays(chunk_nums)
+    total_denom = _sum_arrays(chunk_denoms)
+    loonumerators = [total_num - chunk_num for chunk_num in chunk_nums]
+    loodenominators = [total_denom - chunk_denom for chunk_denom in chunk_denoms]
 
     return chunk_nums, chunk_denoms, loonumerators, loodenominators, chunkinfo
 
@@ -113,6 +123,8 @@ def residualize(
     chunk_denoms: list[np.ndarray],
     num_background: int,
     k: int,
+    total_num: np.ndarray | None = None,
+    total_denom: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Residualize background annotations out of a marginal annotation."""
 
@@ -122,8 +134,8 @@ def residualize(
     muy = np.array([])
 
     if num_background > 0:
-        num = sum(chunk_nums, np.zeros_like(chunk_nums[0]))
-        denom = sum(chunk_denoms, np.zeros_like(chunk_denoms[0]))
+        num = _sum_arrays(chunk_nums) if total_num is None else total_num
+        denom = _sum_arrays(chunk_denoms) if total_denom is None else total_denom
         ATA = denom[:num_background][:, :num_background]
         ATy = num[:num_background]
         ATx = denom[:num_background][:, num_background + k]

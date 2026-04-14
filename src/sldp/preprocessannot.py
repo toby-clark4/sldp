@@ -17,6 +17,9 @@ from sldp.workflow_io import load_ldblocks as _load_ldblocks
 from sldp.workflow_io import load_print_snps as _load_print_snps
 
 
+RV_CHUNK_WIDTH = 256
+
+
 def _prepare_chromosome_annotation(
     refpanel: gd.Dataset,
     annot: ga.Annotation,
@@ -59,16 +62,22 @@ def _write_annotation_info(snps: pd.DataFrame, names: list[str], output_path: st
     """Write per-annotation summary metrics for one chromosome."""
 
     print("computing basic statistics and writing")
-    info = pd.DataFrame(columns=["M", "M_5_50", "sqnorm", "sqnorm_5_50", "supp", "supp_5_50"])
-    info["name"] = names
-    info.set_index("name", inplace=True)
-    info["M"] = len(snps)
-    info["sqnorm"] = np.linalg.norm(snps[names], axis=0) ** 2
-    info["supp"] = np.linalg.norm(snps[names], ord=0, axis=0)
+    annotation_values = snps.loc[:, names].to_numpy(copy=False)
     maf_mask = (snps.MAF >= 0.05).values
-    info["M_5_50"] = maf_mask.sum()
-    info["sqnorm_5_50"] = np.linalg.norm(snps.loc[maf_mask, names], axis=0) ** 2
-    info["supp_5_50"] = np.linalg.norm(snps.loc[maf_mask, names], ord=0, axis=0)
+    maf_annotation_values = annotation_values[maf_mask]
+
+    info = pd.DataFrame(
+        {
+            "M": len(snps),
+            "M_5_50": maf_mask.sum(),
+            "sqnorm": np.sum(annotation_values * annotation_values, axis=0),
+            "sqnorm_5_50": np.sum(maf_annotation_values * maf_annotation_values, axis=0),
+            "supp": np.count_nonzero(annotation_values, axis=0).astype(float),
+            "supp_5_50": np.count_nonzero(maf_annotation_values, axis=0).astype(float),
+        },
+        index=names,
+    )
+    info.index.name = "name"
     info.to_csv(output_path, sep="\t")
 
 
@@ -82,6 +91,7 @@ def _compute_rv_values(
 ) -> None:
     """Fill per-SNP RV values for one chromosome."""
 
+    result_column_count = len(names)
     for _, X, meta, ind in refpanel.block_data(ldblocks, chrom, meta=snps):
         if X is None or meta is None:
             raise ValueError("annotation RV computation requires genotypes and metadata")
@@ -94,10 +104,17 @@ def _compute_rv_values(
             snps.loc[ind, result_names] = 0
             continue
 
-        mask = meta.printsnp.values
-        annotation_values = meta[names].values
-        xv = X.dot(annotation_values)
-        snps.loc[ind[mask], result_names] = X[:, mask].T.dot(xv[:, -len(names) :]) / X.shape[0]
+        mask = meta.printsnp.to_numpy(copy=False)
+        annotation_values = meta.loc[:, names].to_numpy(copy=False)
+        print_genotypes = X[:, mask]
+        rv_values = np.empty((int(mask.sum()), result_column_count), dtype=float)
+
+        for start in range(0, result_column_count, RV_CHUNK_WIDTH):
+            stop = min(start + RV_CHUNK_WIDTH, result_column_count)
+            annotation_chunk = annotation_values[:, start:stop]
+            rv_values[:, start:stop] = print_genotypes.T @ (X @ annotation_chunk) / X.shape[0]
+
+        snps.loc[ind[mask], result_names] = rv_values
 
 
 def _write_rv_output(snps: pd.DataFrame, names: list[str], result_names: list[str], output_path: Path) -> None:

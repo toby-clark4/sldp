@@ -27,6 +27,15 @@ class TestDataset:
         assert matrix.shape == (4, 3)
         np.testing.assert_allclose(matrix.mean(axis=0), np.zeros(3), atol=1e-10)
 
+    def test_stdX_matches_single_standardize_pass(self) -> None:
+        dataset = Dataset(FIXTURE_BFILE)
+
+        matrix = dataset.stdX(1, (0, 3))
+        expected = dataset.data(1)[:, range(0, 3)].read()
+        expected.standardize()
+
+        np.testing.assert_allclose(matrix, expected.val)
+
     def test_block_data_yields_expected_blocks_without_genotypes(self) -> None:
         dataset = Dataset(FIXTURE_BFILE)
         ldblocks = dataset.bim_df(1).assign(chr="chr1")[["chr", "BP"]].copy()

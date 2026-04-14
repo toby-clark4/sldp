@@ -45,7 +45,6 @@ class Dataset:
 
         genotypes = self.data(chrnum)[:, indices].read()
         genotypes.standardize()
-        genotypes.standardize()
         return genotypes.val
 
     def bfile(self, chrnum: int) -> str:

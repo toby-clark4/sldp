@@ -122,6 +122,8 @@ class TestComputeAnnotationResult:
             sigma2g=0.25,
             chunk_nums=[np.array([1.0])],
             chunk_denoms=[np.array([[1.0]])],
+            total_chunk_num=np.array([1.0]),
+            total_chunk_denom=np.array([[1.0]]),
             loo_nums=[np.array([1.0])],
             loo_denoms=[np.array([[1.0]])],
         )
@@ -163,6 +165,8 @@ class TestComputeAnnotationResult:
             sigma2g=0.25,
             chunk_nums=[np.array([1.0])],
             chunk_denoms=[np.array([[1.0]])],
+            total_chunk_num=np.array([1.0]),
+            total_chunk_denom=np.array([[1.0]]),
             loo_nums=[np.array([1.0])],
             loo_denoms=[np.array([[1.0]])],
         )
@@ -199,6 +203,8 @@ class TestComputeAnnotationResult:
                 sigma2g=0.25,
                 chunk_nums=[np.array([1.0])],
                 chunk_denoms=[np.array([[1.0]])],
+                total_chunk_num=np.array([1.0]),
+                total_chunk_denom=np.array([[1.0]]),
                 loo_nums=[np.array([1.0])],
                 loo_denoms=[np.array([[1.0]])],
             )
@@ -241,6 +247,8 @@ class TestComputeAnnotationResult:
             sigma2g=0.25,
             chunk_nums=[np.array([1.0])],
             chunk_denoms=[np.array([[1.0]])],
+            total_chunk_num=np.array([1.0]),
+            total_chunk_denom=np.array([[1.0]]),
             loo_nums=[np.array([1.0])],
             loo_denoms=[np.array([[1.0]])],
             rng=rng,

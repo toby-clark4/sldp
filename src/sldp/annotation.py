@@ -101,7 +101,7 @@ def reconciled_to(
     result.loc[missing, "A2_df"] = "-"
 
     a1234 = (result.A1 + result.A2 + result.A1_df + result.A2_df).str.upper()
-    match = ~missing & a1234.apply(lambda alleles: alleles in MATCH_ALLELES)
+    match = ~missing & a1234.isin(MATCH_ALLELES)
     n_mismatch = (~missing & ~match).sum()
     print(
         "of",
@@ -113,7 +113,7 @@ def reconciled_to(
     result.loc[~missing & ~match, colnames] = missing_val
 
     if signed:
-        flip = match & a1234.apply(lambda alleles: alleles in FLIP_ALLELES)
+        flip = match & a1234.isin(FLIP_ALLELES)
         n_flip = flip.sum()
         print(
             "of the remaining",

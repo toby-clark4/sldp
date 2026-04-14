@@ -131,7 +131,6 @@ def _process_chromosome(
         if meta is None:
             raise ValueError("phenotype preprocessing requires block metadata")
         svd_r_path = Path(f"{svd_stem}{ldblock.name}.R.npz")
-        svd_r2_path = Path(f"{svd_stem}{ldblock.name}.R2.npz")
         if meta.printsnp.sum() == 0 or not svd_r_path.exists():
             print("no svd snps found in this block")
             continue
@@ -142,20 +141,12 @@ def _process_chromosome(
             continue
 
         r = np.load(svd_r_path)
-        r2 = np.load(svd_r2_path)
         sample_size = meta[meta.typed.values].N.mean()
         meta_svd = meta[meta.printsnp.values]
-        snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = weights.invert_weights(
-            r,
-            r2,
-            sigma2g,
-            sample_size,
-            meta_svd.ahat.values,
-            mode="Winv_ahat_I",
-        )
+        snps.loc[ind[meta.printsnp], "Winv_ahat_I"] = meta_svd.ahat.values
         snps.loc[ind[meta.printsnp], "Winv_ahat_h"] = weights.invert_weights(
             r,
-            r2,
+            None,
             sigma2g,
             sample_size,
             meta_svd.ahat.values,

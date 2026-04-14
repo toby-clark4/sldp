@@ -231,6 +231,8 @@ def _compute_annotation_result(
     sigma2g: float,
     chunk_nums: list[np.ndarray],
     chunk_denoms: list[np.ndarray],
+    total_chunk_num: np.ndarray,
+    total_chunk_denom: np.ndarray,
     loo_nums: list[np.ndarray],
     loo_denoms: list[np.ndarray],
     rng: np.random.Generator | np.random.RandomState | None = None,
@@ -247,6 +249,8 @@ def _compute_annotation_result(
         sigma2g,
         chunk_nums,
         chunk_denoms,
+        total_chunk_num,
+        total_chunk_denom,
         loo_nums,
         loo_denoms,
         chunkstats_module=cs,
@@ -320,6 +324,8 @@ def run(args: argparse.Namespace) -> None:
 
         print("jackknifing")
         chunk_nums, chunk_denoms, loo_nums, loo_denoms, chunkinfo = cs.collapse_to_chunks(ldblocks, numerators, denominators, args.jk_blocks)
+        total_chunk_num = np.sum(np.stack(chunk_nums), axis=0)
+        total_chunk_denom = np.sum(np.stack(chunk_denoms), axis=0)
 
         result_rows: list[dict[str, float | str]] = []
         for i, name in enumerate(annotation_context.marginal_names):
@@ -334,6 +340,8 @@ def run(args: argparse.Namespace) -> None:
                 sigma2g=sigma2g,
                 chunk_nums=chunk_nums,
                 chunk_denoms=chunk_denoms,
+                total_chunk_num=total_chunk_num,
+                total_chunk_denom=total_chunk_denom,
                 loo_nums=loo_nums,
                 loo_denoms=loo_denoms,
                 rng=rng,
