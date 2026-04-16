@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sldp.workflow_io import load_ldblocks, load_print_snps
+from sldp.io.workflow_io import load_ldblocks, load_print_snps
 
 
 class TestLoadLdblocks:

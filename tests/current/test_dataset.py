@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sldp.dataset import Dataset
+from sldp.io.dataset import Dataset
 
 
 FIXTURE_BFILE = "tests/fixtures/phase1_tiny/data/refpanel/toy_ref."

@@ -3,7 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 
-from sldp import fs, memo, pretty
+from sldp.utils import fs, pretty, memo
 
 
 class TestFsHelpers:

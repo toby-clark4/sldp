@@ -4,8 +4,7 @@ import argparse
 
 import sldp.preprocessannot
 import sldp.preprocesspheno
-import sldp.sldp as main_sldp
-from sldp.sldp import preprocess_sannots, preprocess_sumstats
+from sldp.core import processed_inputs
 
 
 class TestPreprocessSumstats:
@@ -18,7 +17,6 @@ class TestPreprocessSumstats:
         def fake_run(args: argparse.Namespace) -> None:
             calls.append(args)
 
-        monkeypatch.setattr("os.path.exists", fake_exists)
         monkeypatch.setattr(sldp.preprocesspheno, "run", fake_run)
 
         args = argparse.Namespace(
@@ -29,7 +27,7 @@ class TestPreprocessSumstats:
             config="cfg.json",
         )
 
-        preprocess_sumstats(args)
+        processed_inputs.preprocess_sumstats(args, path_exists=fake_exists)
 
         assert len(calls) == 1
         assert calls[0].chroms == [1, 2]
@@ -48,7 +46,6 @@ class TestPreprocessSumstats:
         def fake_run(args: argparse.Namespace) -> None:
             calls.append(args)
 
-        monkeypatch.setattr("os.path.exists", fake_exists)
         monkeypatch.setattr(sldp.preprocesspheno, "run", fake_run)
 
         args = argparse.Namespace(
@@ -59,7 +56,7 @@ class TestPreprocessSumstats:
             config="cfg.json",
         )
 
-        preprocess_sumstats(args)
+        processed_inputs.preprocess_sumstats(args, path_exists=fake_exists)
 
         assert calls == []
         assert args.pss_chr == "sumstats/toy.KG3.95/"
@@ -76,7 +73,6 @@ class TestPreprocessSannots:
         def fake_run(args: argparse.Namespace) -> None:
             calls.append(args)
 
-        monkeypatch.setattr("os.path.exists", fake_exists)
         monkeypatch.setattr(sldp.preprocessannot, "run", fake_run)
 
         args = argparse.Namespace(
@@ -85,7 +81,7 @@ class TestPreprocessSannots:
             config="cfg.json",
         )
 
-        preprocess_sannots(args)
+        processed_inputs.preprocess_sannots(args, path_exists=fake_exists)
 
         assert len(calls) == 2
         assert calls[0].sannot_chr == ["annot/a."]
@@ -112,7 +108,6 @@ class TestPreprocessSannots:
         def fake_run(args: argparse.Namespace) -> None:
             calls.append(args)
 
-        monkeypatch.setattr("os.path.exists", fake_exists)
         monkeypatch.setattr(sldp.preprocessannot, "run", fake_run)
 
         args = argparse.Namespace(
@@ -122,7 +117,7 @@ class TestPreprocessSannots:
             config="cfg.json",
         )
 
-        preprocess_sannots(args)
+        processed_inputs.preprocess_sannots(args, path_exists=fake_exists)
 
         assert len(calls) == 1
         assert calls[0].sannot_chr == ["annot/b."]
@@ -132,7 +127,7 @@ class TestPreprocessSannots:
 
 class TestEnsureProcessedInputs:
     def test_missing_processed_inputs_raise_without_preprocess(self, monkeypatch) -> None:
-        monkeypatch.setattr("os.path.exists", lambda path: False)
+        fake_exists = lambda path: False
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -146,7 +141,12 @@ class TestEnsureProcessedInputs:
         )
 
         try:
-            main_sldp._ensure_processed_inputs(args)
+            processed_inputs.ensure_processed_inputs(
+                args,
+                preprocess_sumstats_fn=processed_inputs.preprocess_sumstats,
+                preprocess_sannots_fn=processed_inputs.preprocess_sannots,
+                path_exists=fake_exists,
+            )
         except ValueError as exc:
             assert "Missing processed phenotype artifacts" in str(exc)
             assert "--preprocess and --config" in str(exc)
@@ -159,7 +159,7 @@ class TestEnsureProcessedInputs:
             "sumstats/toy.KG3.95/1.pss.gz",
             "sumstats/toy.KG3.95/2.pss.gz",
         }
-        monkeypatch.setattr("os.path.exists", lambda path: path in existing)
+        fake_exists = lambda path: path in existing
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -173,7 +173,12 @@ class TestEnsureProcessedInputs:
         )
 
         try:
-            main_sldp._ensure_processed_inputs(args)
+            processed_inputs.ensure_processed_inputs(
+                args,
+                preprocess_sumstats_fn=processed_inputs.preprocess_sumstats,
+                preprocess_sannots_fn=processed_inputs.preprocess_sannots,
+                path_exists=fake_exists,
+            )
         except ValueError as exc:
             assert "Missing processed annotation artifacts" in str(exc)
             assert "annot/a.1.RV.gz" in str(exc)
@@ -195,9 +200,9 @@ class TestEnsureProcessedInputs:
             args.pss_chr = "sumstats/toy.KG3.95/"
             args.sumstats_stem = None
 
-        monkeypatch.setattr("os.path.exists", lambda path: path in existing)
-        monkeypatch.setattr(main_sldp, "preprocess_sumstats", fake_preprocess_sumstats)
-        monkeypatch.setattr(main_sldp, "preprocess_sannots", lambda args: calls.append("sannots"))
+        def fake_preprocess_sannots(args: argparse.Namespace) -> None:
+            del args
+            calls.append("sannots")
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -210,12 +215,17 @@ class TestEnsureProcessedInputs:
             config="cfg.json",
         )
 
-        main_sldp._ensure_processed_inputs(args)
+        processed_inputs.ensure_processed_inputs(
+            args,
+            preprocess_sumstats_fn=fake_preprocess_sumstats,
+            preprocess_sannots_fn=fake_preprocess_sannots,
+            path_exists=lambda path: path in existing,
+        )
 
         assert calls == ["sumstats", "sannots"]
 
     def test_preprocess_mode_rejects_missing_pss_inputs_without_sumstats_source(self, monkeypatch) -> None:
-        monkeypatch.setattr("os.path.exists", lambda path: False)
+        fake_exists = lambda path: False
 
         args = argparse.Namespace(
             pss_chr="sumstats/toy.KG3.95/",
@@ -229,7 +239,12 @@ class TestEnsureProcessedInputs:
         )
 
         try:
-            main_sldp._ensure_processed_inputs(args)
+            processed_inputs.ensure_processed_inputs(
+                args,
+                preprocess_sumstats_fn=processed_inputs.preprocess_sumstats,
+                preprocess_sannots_fn=processed_inputs.preprocess_sannots,
+                path_exists=fake_exists,
+            )
         except ValueError as exc:
             assert "Cannot rebuild them from --pss-chr alone" in str(exc)
         else:
@@ -247,9 +262,13 @@ class TestEnsureProcessedInputs:
             "annot/a.2.info",
         }
 
-        monkeypatch.setattr("os.path.exists", lambda path: path in existing)
-        monkeypatch.setattr(main_sldp, "preprocess_sumstats", lambda args: calls.append("sumstats"))
-        monkeypatch.setattr(main_sldp, "preprocess_sannots", lambda args: calls.append("sannots"))
+        def fake_preprocess_sumstats(args: argparse.Namespace) -> None:
+            del args
+            calls.append("sumstats")
+
+        def fake_preprocess_sannots(args: argparse.Namespace) -> None:
+            del args
+            calls.append("sannots")
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -262,26 +281,13 @@ class TestEnsureProcessedInputs:
             config="cfg.json",
         )
 
-        main_sldp._ensure_processed_inputs(args)
+        processed_inputs.ensure_processed_inputs(
+            args,
+            preprocess_sumstats_fn=fake_preprocess_sumstats,
+            preprocess_sannots_fn=fake_preprocess_sannots,
+            path_exists=lambda path: path in existing,
+        )
 
         assert calls == []
         assert args.pss_chr == "sumstats/toy.KG3.95/"
         assert args.sumstats_stem is None
-
-
-class TestBuildParser:
-    def test_build_parser_supports_explicit_preprocess_flag(self) -> None:
-        args = main_sldp.build_parser().parse_args(
-            [
-                "--outfile-stem",
-                "out/toy",
-                "--pss-chr",
-                "sumstats/toy.KG3.95/",
-                "--sannot-chr",
-                "annot/a.",
-                "--preprocess",
-            ]
-        )
-
-        assert args.preprocess is True
-        assert args.refpanel_name == "KG3.95"

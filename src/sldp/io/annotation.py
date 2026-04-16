@@ -4,7 +4,7 @@ import itertools
 import numpy as np
 import pandas as pd
 
-from sldp import fs, memo
+from sldp.utils import memo, fs
 
 
 COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}

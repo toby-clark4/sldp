@@ -9,15 +9,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import sldp.annotation as ga
-import sldp.config as config
-import sldp.dataset as gd
-import sldp.fs as fs
-import sldp.memo as memo
-import sldp.pretty as pretty
-import sldp.weights as weights
-from sldp.workflow_io import load_ldblocks as _load_ldblocks
-from sldp.workflow_io import load_print_snps as _load_print_snps
+from sldp.utils import config, memo, pretty, fs
+from sldp.io import (
+    annotation as ga,
+    dataset as gd,
+)
+from sldp.core import weights
+from sldp.io.workflow_io import (
+    load_ldblocks as _load_ldblocks,
+    load_print_snps as _load_print_snps,
+)
+from sldp.utils.multiproc import validate_num_proc
 
 
 def _read_sumstats(sumstats_stem: str) -> pd.DataFrame:
@@ -256,6 +258,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Space-delimited list of chromosomes to analyze. Default is 1..22",
     )
+    parser.add_argument(
+        "--num-proc",
+        type=int,
+        default=1,
+        help="Number of worker processes for chromosome/annotation parallelism. Default is 1 (serial).",
+    )
 
     # configurable arguments
     parser.add_argument(
@@ -305,6 +313,7 @@ def main() -> None:
     print(" ".join(sys.argv))
     print("=====")
     args = build_parser().parse_args()
+    args = validate_num_proc(args)
     config.add_default_params(args)
     pretty.print_namespace(args)
     print("=====")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sldp.weights import invert_weights
+from sldp.core.weights import invert_weights
 
 
 class TestInvertWeights:

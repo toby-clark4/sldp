@@ -6,28 +6,25 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import sldp.annotation as ga
-import sldp.chunkstats as cs
-import sldp.config as config
-import sldp.dataset as gd
-import sldp.memo as memo
-import sldp.pretty as pretty
+
+import sldp.core.chunkstats as cs
+from sldp.core import (
+    regression,
+    processed_inputs,
+    weights,
+    chunkstats as cs,
+)
+from sldp.io import (
+    annotation as ga,
+    dataset as gd,
+)
+from sldp.utils import(
+    config,
+    memo,
+    pretty,
+)
 import sldp.storyteller as storyteller
-import sldp.weights as weights
-from sldp._processed_inputs import ensure_processed_inputs as _ensure_processed_inputs_impl
-from sldp._processed_inputs import format_missing_message as _format_missing_message_impl
-from sldp._processed_inputs import missing_annotation_artifacts as _missing_annotation_artifacts_impl
-from sldp._processed_inputs import missing_pheno_artifacts as _missing_pheno_artifacts_impl
-from sldp._processed_inputs import preprocess_sannots as _preprocess_sannots_impl
-from sldp._processed_inputs import preprocess_sumstats as _preprocess_sumstats_impl
-from sldp._processed_inputs import processed_pss_path as _processed_pss_path_impl
-from sldp._regression_workflow import AnnotationContext, AnnotationResult
-from sldp._regression_workflow import build_annotation_context
-from sldp._regression_workflow import collect_block_statistics
-from sldp._regression_workflow import compute_annotation_result
-from sldp._regression_workflow import load_trait_info
-from sldp._regression_workflow import write_verbose_outputs
-from sldp.workflow_io import load_ldblocks
+from sldp.io.workflow_io import load_ldblocks
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,111 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_annotation_context(args: argparse.Namespace) -> AnnotationContext:
-    return build_annotation_context(args, annotation_module=ga)
-
-
-def _load_trait_info(pss_chr: str) -> tuple[str, float, float]:
-    return load_trait_info(pss_chr)
-
-
-def _collect_block_statistics(
-    args: argparse.Namespace,
-    refpanel: gd.Dataset,
-    ldblocks: pd.DataFrame,
-    annotation_context: AnnotationContext,
-    sigma2g: float,
-) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray], pd.DataFrame]:
-    """Collect per-block numerator and denominator terms across chromosomes."""
-
-    return collect_block_statistics(
-        args,
-        refpanel,
-        ldblocks,
-        annotation_context,
-        sigma2g,
-        weights_module=weights,
-        memo_module=memo,
-    )
-
-
-def _compute_annotation_result(
-    args: argparse.Namespace,
-    pheno_name: str,
-    name: str,
-    annotation_context: AnnotationContext,
-    index: int,
-    h2g: float,
-    sigma2g: float,
-    chunk_nums: list[np.ndarray],
-    chunk_denoms: list[np.ndarray],
-    total_chunk_num: np.ndarray,
-    total_chunk_denom: np.ndarray,
-    loo_nums: list[np.ndarray],
-    loo_denoms: list[np.ndarray],
-    rng: np.random.Generator | np.random.RandomState | None = None,
-) -> AnnotationResult:
-    """Compute regression statistics for one marginal annotation."""
-
-    return compute_annotation_result(
-        args,
-        pheno_name,
-        name,
-        annotation_context,
-        index,
-        h2g,
-        sigma2g,
-        chunk_nums,
-        chunk_denoms,
-        total_chunk_num,
-        total_chunk_denom,
-        loo_nums,
-        loo_denoms,
-        chunkstats_module=cs,
-        rng=rng,
-    )
-
-
-def _write_verbose_outputs(
-    outfile_stem: str, pheno_name: str, name: str, background_names: list[str], chunkinfo: pd.DataFrame, result: AnnotationResult
-) -> None:
-    write_verbose_outputs(outfile_stem, pheno_name, name, background_names, chunkinfo, result)
-
-
-def _processed_pss_path(args: argparse.Namespace) -> str:
-    return _processed_pss_path_impl(args)
-
-
-def _missing_pheno_artifacts(args: argparse.Namespace) -> list[str]:
-    return _missing_pheno_artifacts_impl(args, path_exists=os.path.exists)
-
-
-def _missing_annotation_artifacts(args: argparse.Namespace) -> dict[str, list[str]]:
-    return _missing_annotation_artifacts_impl(args, path_exists=os.path.exists)
-
-
-def _format_missing_message(header: str, missing: list[str], hint: str | None = None) -> str:
-    return _format_missing_message_impl(header, missing, hint)
-
-
-def _ensure_processed_inputs(args: argparse.Namespace) -> None:
-    _ensure_processed_inputs_impl(
-        args,
-        preprocess_sumstats_fn=preprocess_sumstats,
-        preprocess_sannots_fn=preprocess_sannots,
-        path_exists=os.path.exists,
-    )
-
-
-def _load_ldblocks(path: str) -> pd.DataFrame:
-    return load_ldblocks(path)
-
-
 def run(args: argparse.Namespace) -> None:
     """Execute SLDP regression from a parsed argument namespace."""
 
     with memo.cache_scope():
-        _ensure_processed_inputs(args)
+        processed_inputs.ensure_processed_inputs(
+            args,
+            preprocess_sumstats_fn=processed_inputs.preprocess_sumstats,
+            preprocess_sannots_fn=processed_inputs.preprocess_sannots,
+            path_exists=os.path.exists,
+        )
 
         print("initializing...")
 
@@ -308,18 +210,20 @@ def run(args: argparse.Namespace) -> None:
             rng = np.random.RandomState(args.seed)
             print("random seed:", args.seed)
 
-        annotation_context = _build_annotation_context(args)
+        annotation_context = regression.build_annotation_context(args, annotation_module=ga)
         print("background annotations:", annotation_context.background_names)
         print("marginal annotations:", annotation_context.marginal_names)
 
-        pheno_name, sigma2g, h2g = _load_trait_info(args.pss_chr)
+        pheno_name, sigma2g, h2g = regression.load_trait_info(args.pss_chr)
         ldblocks = load_ldblocks(args.ld_blocks)
-        numerators, denominators, ldblocks = _collect_block_statistics(
+        numerators, denominators, ldblocks = regression.collect_block_statistics(
             args,
             refpanel,
             ldblocks,
             annotation_context,
             sigma2g,
+            weights_module=weights,
+            memo_module=memo,
         )
 
         print("jackknifing")
@@ -330,7 +234,7 @@ def run(args: argparse.Namespace) -> None:
         result_rows: list[dict[str, float | str]] = []
         for i, name in enumerate(annotation_context.marginal_names):
             print(i, name)
-            annotation_result = _compute_annotation_result(
+            annotation_result = regression.compute_annotation_result(
                 args=args,
                 pheno_name=pheno_name,
                 name=name,
@@ -344,13 +248,14 @@ def run(args: argparse.Namespace) -> None:
                 total_chunk_denom=total_chunk_denom,
                 loo_nums=loo_nums,
                 loo_denoms=loo_denoms,
+                chunkstats_module=cs,
                 rng=rng,
             )
             result_rows.append(annotation_result.row)
             current_p = float(annotation_result.row["p"])
 
             if current_p < args.verbose_thresh:
-                _write_verbose_outputs(
+                regression.write_verbose_outputs(
                     outfile_stem=args.outfile_stem,
                     pheno_name=pheno_name,
                     name=name,
@@ -391,14 +296,6 @@ def main() -> None:
     print("=====")
 
     run(args)
-
-
-def preprocess_sumstats(args: argparse.Namespace) -> None:
-    _preprocess_sumstats_impl(args, path_exists=os.path.exists)
-
-
-def preprocess_sannots(args: argparse.Namespace) -> None:
-    _preprocess_sannots_impl(args, path_exists=os.path.exists)
 
 
 if __name__ == "__main__":

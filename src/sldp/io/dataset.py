@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from pysnptools.snpreader import Bed
 
-from sldp import memo
+from sldp.utils import memo
 
 
 def _chunked_indices(length: int, size: int) -> Iterator[list[int]]:

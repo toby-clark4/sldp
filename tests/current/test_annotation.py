@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sldp.annotation import Annotation, reconciled_to, smart_merge
+from sldp.io.annotation import Annotation, reconciled_to, smart_merge
 
 
 class TestSmartMerge:

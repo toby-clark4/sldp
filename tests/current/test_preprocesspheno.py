@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sldp.dataset import Dataset
+from sldp.io.dataset import Dataset
 from sldp.preprocesspheno import (
     _estimate_h2g,
     _filter_sumstats,

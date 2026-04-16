@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 
-import sldp.fs as fs
+from sldp.utils import fs
 
 
 def _sum_arrays(arrays: list[np.ndarray]) -> np.ndarray:

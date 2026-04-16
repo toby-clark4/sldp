@@ -3,9 +3,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-import sldp.annotation as ga
-import sldp.dataset as gd
-import sldp.fs as fs
+from sldp.io import (
+    annotation as ga,
+    dataset as gd,
+)
+from sldp.utils import fs
 
 
 # find windows with genome-wide significant SNPs that are consistent with the global signal

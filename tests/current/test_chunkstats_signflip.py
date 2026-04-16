@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sldp.chunkstats import signflip
+from sldp.core.chunkstats import signflip
 
 
 class TestSignflip:

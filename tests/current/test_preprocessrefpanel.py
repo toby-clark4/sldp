@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sldp.dataset import Dataset
+from sldp.io.dataset import Dataset
 from sldp.preprocessrefpanel import (
     _best_svd,
     _load_ldblocks,

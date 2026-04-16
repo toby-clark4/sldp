@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from sldp.annotation import Annotation
-from sldp.dataset import Dataset
+from sldp.io.annotation import Annotation
+from sldp.io.dataset import Dataset
 from sldp.preprocessannot import (
     _compute_rv_values,
     _load_ldblocks,

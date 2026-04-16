@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sldp.config import add_default_params
+from sldp.utils.config import add_default_params
 
 
 class TestAddDefaultParams:

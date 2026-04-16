@@ -10,11 +10,15 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 
-import sldp.annotation as ga
-import sldp.chunkstats as cs
-import sldp.dataset as gd
-import sldp.memo as memo
-import sldp.weights as weights
+from sldp.io import (
+    annotation as ga,
+    dataset as gd,
+)
+from sldp.core import (
+    chunkstats as cs,
+    weights,
+)
+from sldp.utils import memo
 
 
 @dataclass(frozen=True)
@@ -208,7 +212,9 @@ def _compute_block_statistics(
     if (annotation_values == 0).all():
         return None
 
-    typed_mask = meta.typed.to_numpy(copy=False)
+    # Pandas can preserve this mask as nullable/object dtype after DataFrame
+    # merges and block slicing; force a concrete boolean array before indexing.
+    typed_mask = meta["typed"].fillna(False).to_numpy(dtype=bool, copy=False)
     typed_annotation_values = annotation_values[typed_mask]
     sample_size = meta.loc[typed_mask, "N"].mean()
     r, r2 = _load_regression_weights(weights_mode, r_path, r2_path, len(meta))
