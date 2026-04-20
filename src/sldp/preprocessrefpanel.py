@@ -1,6 +1,7 @@
 import argparse
 import gc
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,19 @@ from sldp.io.workflow_io import (
     load_ldblocks as _load_ldblocks,
     load_print_snps as _load_print_snps,
 )
-from sldp.utils.multiproc import validate_num_proc
+from sldp.utils.multiproc import execute_tasks, validate_num_proc
+
+
+@dataclass(frozen=True)
+class ChromosomeSvdTask:
+    """Inputs needed to preprocess one chromosome of the reference panel."""
+
+    bfile_chr: str
+    ldblocks: pd.DataFrame
+    print_snps: pd.DataFrame
+    chrom: int
+    svd_stem: str
+    spectrum_percent: float
 
 
 def _best_svd(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -64,6 +77,36 @@ def _save_block_svds(X_print: np.ndarray, block_name: int, svd_stem: str | Path,
     k = _truncated_rank(r2_svs, spectrum_percent)
     print("\treduced rank of", k, "out of", num_print_snps, "printed snps")
     np.savez(_svd_output_path(svd_stem, block_name, "R2"), U=U_[:, :k], svs=r2_svs[:k])
+
+
+def _process_chromosome_task(task: ChromosomeSvdTask) -> None:
+    """Process and write all block SVDs for one chromosome."""
+
+    try:
+        with memo.cache_scope():
+            refpanel = gd.Dataset(task.bfile_chr)
+            print("loading chr", task.chrom)
+            snps = _prepare_chromosome_snps(refpanel, task.chrom, task.print_snps)
+
+            for ldblock, X, meta, _ in refpanel.block_data(task.ldblocks, task.chrom, meta=snps):
+                if X is None or meta is None:
+                    raise ValueError("reference panel block processing requires genotypes and metadata")
+                if meta.printsnp.sum() == 0:
+                    print("no print snps found in this block")
+                    continue
+
+                _save_block_svds(
+                    X_print=X[:, meta.printsnp.values],
+                    block_name=ldblock.name,
+                    svd_stem=task.svd_stem,
+                    spectrum_percent=task.spectrum_percent,
+                    num_print_snps=int(meta.printsnp.sum()),
+                )
+
+            del snps
+            gc.collect()
+    except Exception as exc:
+        raise RuntimeError(f"reference panel preprocessing failed for chromosome {task.chrom}") from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -129,7 +172,6 @@ def run(args: argparse.Namespace) -> None:
     """Preprocess a reference panel into truncated per-block SVDs."""
 
     with memo.cache_scope():
-        refpanel = gd.Dataset(args.bfile_chr)
         fs.makedir_for_file(args.svd_stem)
 
         ldblocks = _load_ldblocks(args.ld_blocks)
@@ -137,28 +179,21 @@ def run(args: argparse.Namespace) -> None:
         print_snps = _load_print_snps(args.print_snps)
         print(len(print_snps), "print snps")
 
-        for c in args.chroms:
-            print("loading chr", c, "of", args.chroms)
-            snps = _prepare_chromosome_snps(refpanel, c, print_snps)
-
-            for ldblock, X, meta, _ in refpanel.block_data(ldblocks, c, meta=snps):
-                if X is None or meta is None:
-                    raise ValueError("reference panel block processing requires genotypes and metadata")
-                if meta.printsnp.sum() == 0:
-                    print("no print snps found in this block")
-                    continue
-
-                _save_block_svds(
-                    X_print=X[:, meta.printsnp.values],
-                    block_name=ldblock.name,
+        execute_tasks(
+            [
+                ChromosomeSvdTask(
+                    bfile_chr=args.bfile_chr,
+                    ldblocks=ldblocks,
+                    print_snps=print_snps,
+                    chrom=chrom,
                     svd_stem=args.svd_stem,
                     spectrum_percent=args.spectrum_percent,
-                    num_print_snps=int(meta.printsnp.sum()),
                 )
-
-            del snps
-            memo.reset()
-            gc.collect()
+                for chrom in args.chroms
+            ],
+            _process_chromosome_task,
+            args.num_proc,
+        )
     print("done")
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,7 @@ from sldp.preprocessannot import (
     _prepare_chromosome_annotation,
     _write_annotation_info,
     _write_rv_output,
+    run,
 )
 
 
@@ -56,3 +58,35 @@ class TestPreprocessAnnotHelpers:
         assert written.columns.tolist() == ["SNP", "A1", "A2", "annot_signal", "annot_signal.R"]
         assert len(written) == 4
         assert written["annot_signal.R"].abs().sum() > 0
+
+    def test_run_dispatches_annotation_chromosome_tasks_in_parallel_mode(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr("sldp.preprocessannot._load_ldblocks", lambda path: _load_ldblocks(str(FIXTURE_ROOT / "data" / "ld_blocks.bed")))
+        monkeypatch.setattr("sldp.preprocessannot._load_print_snps", lambda path: _load_print_snps(str(FIXTURE_ROOT / "data" / "print_snps.txt")))
+
+        def fake_execute_tasks(tasks, worker_fn, num_proc: int):
+            del worker_fn
+            captured["tasks"] = list(tasks)
+            captured["num_proc"] = num_proc
+            return []
+
+        monkeypatch.setattr("sldp.preprocessannot.execute_tasks", fake_execute_tasks)
+
+        args = argparse.Namespace(
+            bfile_chr=str(FIXTURE_ROOT / "data" / "refpanel" / "toy_ref."),
+            sannot_chr=[str(FIXTURE_ROOT / "data" / "annot" / "toy_annot.")],
+            ld_blocks=str(FIXTURE_ROOT / "data" / "ld_blocks.bed"),
+            print_snps=str(FIXTURE_ROOT / "data" / "print_snps.txt"),
+            chroms=[1, 2],
+            num_proc=2,
+            alpha=-1,
+        )
+
+        run(args)
+
+        assert captured["num_proc"] == 2
+        assert [(task.annot_stem, task.chrom) for task in captured["tasks"]] == [
+            (str(FIXTURE_ROOT / "data" / "annot" / "toy_annot."), 1),
+            (str(FIXTURE_ROOT / "data" / "annot" / "toy_annot."), 2),
+        ]

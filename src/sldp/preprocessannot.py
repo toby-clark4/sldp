@@ -3,6 +3,7 @@ import gc
 import gzip
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -17,10 +18,22 @@ from sldp.io.workflow_io import (
     load_ldblocks as _load_ldblocks,
     load_print_snps as _load_print_snps,
 )
-from sldp.utils.multiproc import validate_num_proc
+from sldp.utils.multiproc import execute_tasks, validate_num_proc
 
 
 RV_CHUNK_WIDTH = 256
+
+
+@dataclass(frozen=True)
+class AnnotationChromosomeTask:
+    """Inputs needed to preprocess one annotation on one chromosome."""
+
+    bfile_chr: str
+    annot_stem: str
+    ldblocks: pd.DataFrame
+    print_snps: pd.DataFrame
+    chrom: int
+    alpha: float
 
 
 def _prepare_chromosome_annotation(
@@ -132,31 +145,57 @@ def _write_rv_output(snps: pd.DataFrame, names: list[str], result_names: list[st
         )
 
 
+def _process_annotation_task(task: AnnotationChromosomeTask) -> None:
+    """Process one annotation/chromosome pair and write its outputs."""
+
+    try:
+        with memo.cache_scope():
+            refpanel = gd.Dataset(task.bfile_chr)
+            annot = ga.Annotation(task.annot_stem)
+            print("loading chr", task.chrom, "for", annot.filestem())
+            snps, names, result_names = _prepare_chromosome_annotation(refpanel, annot, task.chrom, task.print_snps, task.alpha)
+            _write_annotation_info(snps, names, annot.info_filename(task.chrom))
+            _compute_rv_values(refpanel, task.ldblocks, task.chrom, snps, names, result_names)
+            _write_rv_output(snps, names, result_names, Path(annot.RV_filename(task.chrom)))
+
+            del snps
+            gc.collect()
+    except Exception as exc:
+        raise RuntimeError(f"annotation preprocessing failed for {task.annot_stem} chromosome {task.chrom}") from exc
+
+
 def run(args: argparse.Namespace) -> None:
     """Preprocess signed annotations into LD-profile tables by chromosome."""
 
     with memo.cache_scope():
         print("initializing...")
 
-        refpanel = gd.Dataset(args.bfile_chr)
         annots = [ga.Annotation(annot) for annot in args.sannot_chr]
         ldblocks = _load_ldblocks(args.ld_blocks)
         print(len(ldblocks), "loci after removing MHC")
         print_snps = _load_print_snps(args.print_snps)
         print(len(print_snps), "print snps")
 
-        for annot in annots:
-            t0 = time.time()
-            for c in args.chroms:
-                print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-                snps, names, result_names = _prepare_chromosome_annotation(refpanel, annot, c, print_snps, args.alpha)
-                _write_annotation_info(snps, names, annot.info_filename(c))
-                _compute_rv_values(refpanel, ldblocks, c, snps, names, result_names)
-                _write_rv_output(snps, names, result_names, Path(annot.RV_filename(c)))
+        task_list = [
+            AnnotationChromosomeTask(
+                bfile_chr=args.bfile_chr,
+                annot_stem=annot.stem_chr,
+                ldblocks=ldblocks,
+                print_snps=print_snps,
+                chrom=chrom,
+                alpha=args.alpha,
+            )
+            for annot in annots
+            for chrom in args.chroms
+        ]
 
-                del snps
-                memo.reset()
-                gc.collect()
+        if args.num_proc == 1:
+            t0 = time.time()
+            for task in task_list:
+                print(time.time() - t0, ": loading chr", task.chrom, "for", task.annot_stem)
+                _process_annotation_task(task)
+        else:
+            execute_tasks(task_list, _process_annotation_task, args.num_proc)
 
     print("done")
 

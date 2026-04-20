@@ -4,6 +4,7 @@ import gzip
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,21 @@ from sldp.io.workflow_io import (
     load_ldblocks as _load_ldblocks,
     load_print_snps as _load_print_snps,
 )
-from sldp.utils.multiproc import validate_num_proc
+from sldp.utils.multiproc import execute_tasks, validate_num_proc
+
+
+@dataclass(frozen=True)
+class PhenotypeChromosomeTask:
+    """Inputs needed to preprocess one chromosome of phenotype summary statistics."""
+
+    bfile_chr: str
+    ldblocks: pd.DataFrame
+    print_snps: pd.DataFrame
+    sumstats: pd.DataFrame
+    svd_stem: str
+    sigma2g: float
+    chrom: int
+    output_path: str
 
 
 def _read_sumstats(sumstats_stem: str) -> pd.DataFrame:
@@ -158,13 +173,31 @@ def _process_chromosome(
     return snps
 
 
+def _process_chromosome_task(task: PhenotypeChromosomeTask) -> None:
+    """Process one chromosome and write its `.pss.gz` output."""
+
+    try:
+        with memo.cache_scope():
+            refpanel = gd.Dataset(task.bfile_chr)
+            print("loading chr", task.chrom)
+            snps = _process_chromosome(refpanel, task.ldblocks, task.chrom, task.print_snps, task.sumstats, task.svd_stem, task.sigma2g)
+
+            print("writing processed sumstats")
+            with gzip.open(task.output_path, "wt") as handle:
+                snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(handle, index=False, sep="\t")
+
+            del snps
+            gc.collect()
+    except Exception as exc:
+        raise RuntimeError(f"phenotype preprocessing failed for chromosome {task.chrom}") from exc
+
+
 def run(args: argparse.Namespace) -> None:
     """Preprocess GWAS summary statistics into weighted per-block inputs."""
 
     with memo.cache_scope():
         print("initializing...")
 
-        refpanel = gd.Dataset(args.bfile_chr)
         ldblocks = _load_ldblocks(args.ld_blocks)
         print_snps = _load_print_snps(args.print_snps)
         print(len(print_snps), "svd snps")
@@ -198,18 +231,27 @@ def run(args: argparse.Namespace) -> None:
         if 1 in args.chroms:
             _write_info_file(dirname, args.sumstats_stem, h2g, sigma2g, ss)
 
-        t0 = time.time()
-        for c in args.chroms:
-            print(time.time() - t0, ": loading chr", c, "of", args.chroms)
-            snps = _process_chromosome(refpanel, ldblocks, c, print_snps, ss, args.svd_stem, sigma2g)
+        task_list = [
+            PhenotypeChromosomeTask(
+                bfile_chr=args.bfile_chr,
+                ldblocks=ldblocks,
+                print_snps=print_snps,
+                sumstats=ss,
+                svd_stem=args.svd_stem,
+                sigma2g=sigma2g,
+                chrom=chrom,
+                output_path=str(dirname / f"{chrom}.pss.gz"),
+            )
+            for chrom in args.chroms
+        ]
 
-            print("writing processed sumstats")
-            with gzip.open(dirname / f"{c}.pss.gz", "wt") as f:
-                snps.loc[snps.printsnp, ["N", "Winv_ahat_I", "Winv_ahat_h"]].to_csv(f, index=False, sep="\t")
-
-            del snps
-            memo.reset()
-            gc.collect()
+        if args.num_proc == 1:
+            t0 = time.time()
+            for task in task_list:
+                print(time.time() - t0, ": loading chr", task.chrom, "of", args.chroms)
+                _process_chromosome_task(task)
+        else:
+            execute_tasks(task_list, _process_chromosome_task, args.num_proc)
 
     print("done")
 

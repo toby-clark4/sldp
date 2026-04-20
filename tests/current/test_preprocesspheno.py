@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,7 @@ from sldp.preprocesspheno import (
     _read_ld_scores,
     _read_sumstats,
     _write_info_file,
+    run,
 )
 
 
@@ -75,3 +77,41 @@ class TestPreprocessPhenoHelpers:
         assert snps["typed"].sum() == 4
         assert np.isfinite(snps.loc[snps["printsnp"], "Winv_ahat_I"]).all()
         assert np.isfinite(snps.loc[snps["printsnp"], "Winv_ahat_h"]).all()
+
+    def test_run_dispatches_one_task_per_chromosome_in_parallel_mode(self, monkeypatch, tmp_path: Path) -> None:
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr("sldp.preprocesspheno._load_ldblocks", lambda path: _load_ldblocks(str(FIXTURE_ROOT / "data" / "ld_blocks.bed")))
+        monkeypatch.setattr("sldp.preprocesspheno._load_print_snps", lambda path: _load_print_snps(str(FIXTURE_ROOT / "data" / "print_snps.txt")))
+        monkeypatch.setattr("sldp.preprocesspheno._read_sumstats", lambda stem: _read_sumstats(str(FIXTURE_ROOT / "data" / "sumstats" / "toy")))
+        monkeypatch.setattr("sldp.preprocesspheno._filter_sumstats", lambda sumstats, print_snps: _filter_sumstats(sumstats, print_snps))
+        monkeypatch.setattr("sldp.preprocesspheno._read_ld_scores", lambda stem: _read_ld_scores(str(FIXTURE_ROOT / "data" / "ldscores.")))
+        monkeypatch.setattr("sldp.preprocesspheno._write_info_file", lambda dirname, sumstats_stem, h2g, sigma2g, sumstats: None)
+        monkeypatch.setattr("sldp.preprocesspheno.fs.makedir", lambda path: Path(path).mkdir(parents=True, exist_ok=True))
+
+        def fake_execute_tasks(tasks, worker_fn, num_proc: int):
+            del worker_fn
+            captured["tasks"] = list(tasks)
+            captured["num_proc"] = num_proc
+            return []
+
+        monkeypatch.setattr("sldp.preprocesspheno.execute_tasks", fake_execute_tasks)
+
+        args = argparse.Namespace(
+            bfile_chr=str(FIXTURE_ROOT / "data" / "refpanel" / "toy_ref."),
+            ld_blocks=str(FIXTURE_ROOT / "data" / "ld_blocks.bed"),
+            print_snps=str(FIXTURE_ROOT / "data" / "print_snps.txt"),
+            sumstats_stem=str(FIXTURE_ROOT / "data" / "sumstats" / "toy"),
+            ldscores_chr=str(FIXTURE_ROOT / "data" / "ldscores."),
+            svd_stem=f"{FIXTURE_ROOT / 'generated' / 'svd'}/",
+            refpanel_name="KG3.95",
+            chroms=[1, 2],
+            num_proc=2,
+            no_M_5_50=False,
+            set_h2g=None,
+        )
+
+        run(args)
+
+        assert captured["num_proc"] == 2
+        assert [task.chrom for task in captured["tasks"]] == [1, 2]

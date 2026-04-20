@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 
-import sldp.core.chunkstats as cs
 from sldp.core import (
     regression,
     processed_inputs,
@@ -18,13 +17,14 @@ from sldp.io import (
     annotation as ga,
     dataset as gd,
 )
-from sldp.utils import(
+from sldp.utils import (
     config,
     memo,
     pretty,
 )
 import sldp.storyteller as storyteller
 from sldp.io.workflow_io import load_ldblocks
+from sldp.utils.multiproc import validate_num_proc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sumstats-stem",
         default=None,
         help='Path to a .sumstats.gz file, not including ".sumstats.gz" extension. '
-        + "SLDP will process this into a set of .pss.gz files before running.",
+        + "Use this together with --preprocess to build missing .pss.gz files before running; otherwise existing processed inputs are required.",
     )
     parser.add_argument(
         "--sannot-chr",
@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--preprocess",
         default=False,
         action="store_true",
-        help="Preprocess missing phenotype or annotation artifacts before running. Only missing outputs are created.",
+        help="Build missing phenotype or annotation artifacts before running. Only missing outputs are created.",
     )
     parser.add_argument(
         "--verbose-thresh",
@@ -145,6 +145,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=range(1, 23),
         type=int,
         help="Space-delimited list of chromosomes to analyze. Default is 1..22",
+    )
+    parser.add_argument(
+        "--num-proc",
+        dest="num_proc",
+        type=int,
+        default=1,
+        help="Number of worker processes for chromosome/annotation parallelism. Default is 1 (serial).",
     )
 
     # configurable arguments
@@ -291,6 +298,7 @@ def main() -> None:
     print(" ".join(sys.argv))
     print("=====")
     args = build_parser().parse_args()
+    args = validate_num_proc(args)
     config.add_default_params(args)
     pretty.print_namespace(args)
     print("=====")

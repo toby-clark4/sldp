@@ -89,27 +89,23 @@ def run_baseline_command(command_name: str, args: list[str], env: dict[str, str]
     run_command(["conda", "run", "-n", "sldp", command_name, *args], env=env or baseline_env())
 
 
-def phase1_pipeline_args(fixture_root: Path, config_path: Path) -> dict[str, list[str]]:
+def phase1_pipeline_args(fixture_root: Path, config_path: Path, *, num_proc: int | None = None) -> dict[str, list[str]]:
+    preprocess_common = ["--config", str(config_path), "--chroms", "1", "2"]
+    if num_proc is not None:
+        preprocess_common.extend(["--num-proc", str(num_proc)])
+
     return {
-        "preprocessrefpanel": ["--config", str(config_path), "--chroms", "1", "2"],
+        "preprocessrefpanel": [*preprocess_common],
         "preprocessannot": [
-            "--config",
-            str(config_path),
+            *preprocess_common,
             "--sannot-chr",
             str(fixture_root / "data" / "annot" / "toy_annot."),
             str(fixture_root / "data" / "annot" / "toy_background."),
-            "--chroms",
-            "1",
-            "2",
         ],
         "preprocesspheno": [
-            "--config",
-            str(config_path),
+            *preprocess_common,
             "--sumstats-stem",
             str(fixture_root / "data" / "sumstats" / "toy"),
-            "--chroms",
-            "1",
-            "2",
         ],
         "sldp": [
             "--config",
@@ -132,8 +128,8 @@ def phase1_pipeline_args(fixture_root: Path, config_path: Path) -> dict[str, lis
     }
 
 
-def run_repo_phase1_pipeline(fixture_root: Path, config_path: Path) -> None:
-    args = phase1_pipeline_args(fixture_root, config_path)
+def run_repo_phase1_pipeline(fixture_root: Path, config_path: Path, *, num_proc: int | None = None) -> None:
+    args = phase1_pipeline_args(fixture_root, config_path, num_proc=num_proc)
     run_repo_module("sldp.preprocessrefpanel", args["preprocessrefpanel"])
     run_repo_module("sldp.preprocessannot", args["preprocessannot"])
     run_repo_module("sldp.preprocesspheno", args["preprocesspheno"])

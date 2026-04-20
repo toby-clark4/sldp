@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from tests.equivalence.helpers import BASELINE_RESULTS, copy_phase1_fixture, run_repo_phase1_pipeline
+from tests.equivalence.helpers import BASELINE_RESULTS, assert_phase1_outputs_equal, copy_phase1_fixture, run_repo_phase1_pipeline
 
 
 class TestPhase1Regression:
@@ -24,3 +24,12 @@ class TestPhase1Regression:
             rtol=1e-9,
             atol=1e-9,
         )
+
+    def test_phase1_fixture_parallel_preprocessing_matches_serial_outputs(self, tmp_path: Path) -> None:
+        serial_fixture, serial_config = copy_phase1_fixture(tmp_path, "repo_serial")
+        parallel_fixture, parallel_config = copy_phase1_fixture(tmp_path, "repo_parallel")
+
+        run_repo_phase1_pipeline(serial_fixture, serial_config)
+        run_repo_phase1_pipeline(parallel_fixture, parallel_config, num_proc=2)
+
+        assert_phase1_outputs_equal(parallel_fixture, serial_fixture)

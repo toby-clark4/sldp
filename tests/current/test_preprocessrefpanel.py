@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from sldp.preprocessrefpanel import (
     _prepare_chromosome_snps,
     _save_block_svds,
     _svd_output_path,
+    run,
 )
 
 
@@ -66,3 +68,36 @@ class TestPreprocessRefpanelHelpers:
         r2 = np.load(r2_path)
         assert set(r.files) == {"U", "svs"}
         assert set(r2.files) == {"U", "svs"}
+
+    def test_run_dispatches_one_task_per_chromosome(self, monkeypatch, tmp_path: Path) -> None:
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr("sldp.preprocessrefpanel.fs.makedir_for_file", lambda path: None)
+        monkeypatch.setattr(
+            "sldp.preprocessrefpanel._load_ldblocks",
+            lambda path: np.array([path]) if False else _load_ldblocks(str(FIXTURE_ROOT / "data" / "ld_blocks.bed")),
+        )
+        monkeypatch.setattr("sldp.preprocessrefpanel._load_print_snps", lambda path: _load_print_snps(str(FIXTURE_ROOT / "data" / "print_snps.txt")))
+
+        def fake_execute_tasks(tasks, worker_fn, num_proc: int):
+            del worker_fn
+            captured["tasks"] = list(tasks)
+            captured["num_proc"] = num_proc
+            return []
+
+        monkeypatch.setattr("sldp.preprocessrefpanel.execute_tasks", fake_execute_tasks)
+
+        args = argparse.Namespace(
+            bfile_chr=str(FIXTURE_BFILE),
+            svd_stem=str(tmp_path / "svd" / "block_"),
+            ld_blocks=str(FIXTURE_ROOT / "data" / "ld_blocks.bed"),
+            print_snps=str(FIXTURE_ROOT / "data" / "print_snps.txt"),
+            chroms=[1, 2],
+            num_proc=2,
+            spectrum_percent=95,
+        )
+
+        run(args)
+
+        assert captured["num_proc"] == 2
+        assert [task.chrom for task in captured["tasks"]] == [1, 2]

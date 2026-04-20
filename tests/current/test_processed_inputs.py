@@ -25,6 +25,7 @@ class TestPreprocessSumstats:
             sumstats_stem="sumstats/toy",
             refpanel_name="KG3.95",
             config="cfg.json",
+            num_proc=3,
         )
 
         processed_inputs.preprocess_sumstats(args, path_exists=fake_exists)
@@ -34,6 +35,7 @@ class TestPreprocessSumstats:
         assert calls[0].sumstats_stem == "sumstats/toy"
         assert calls[0].no_M_5_50 is False
         assert calls[0].set_h2g is None
+        assert calls[0].num_proc == 3
         assert args.pss_chr == "sumstats/toy.KG3.95/"
         assert args.sumstats_stem is None
 
@@ -54,6 +56,7 @@ class TestPreprocessSumstats:
             sumstats_stem="sumstats/toy",
             refpanel_name="KG3.95",
             config="cfg.json",
+            num_proc=2,
         )
 
         processed_inputs.preprocess_sumstats(args, path_exists=fake_exists)
@@ -79,6 +82,7 @@ class TestPreprocessSannots:
             sannot_chr=["annot/a.", "annot/b."],
             chroms=[1, 2],
             config="cfg.json",
+            num_proc=4,
         )
 
         processed_inputs.preprocess_sannots(args, path_exists=fake_exists)
@@ -90,6 +94,8 @@ class TestPreprocessSannots:
         assert calls[1].chroms == [1, 2]
         assert calls[0].alpha == -1
         assert calls[1].alpha == -1
+        assert calls[0].num_proc == 4
+        assert calls[1].num_proc == 4
 
     def test_preprocess_sannots_only_processes_missing_artifacts(self, monkeypatch) -> None:
         calls: list[argparse.Namespace] = []
@@ -115,6 +121,7 @@ class TestPreprocessSannots:
             background_sannot_chr=[],
             chroms=[1, 2],
             config="cfg.json",
+            num_proc=5,
         )
 
         processed_inputs.preprocess_sannots(args, path_exists=fake_exists)
@@ -123,11 +130,14 @@ class TestPreprocessSannots:
         assert calls[0].sannot_chr == ["annot/b."]
         assert calls[0].chroms == [1]
         assert calls[0].alpha == -1
+        assert calls[0].num_proc == 5
 
 
 class TestEnsureProcessedInputs:
     def test_missing_processed_inputs_raise_without_preprocess(self, monkeypatch) -> None:
-        fake_exists = lambda path: False
+        def fake_exists(path: str) -> bool:
+            del path
+            return False
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -159,7 +169,9 @@ class TestEnsureProcessedInputs:
             "sumstats/toy.KG3.95/1.pss.gz",
             "sumstats/toy.KG3.95/2.pss.gz",
         }
-        fake_exists = lambda path: path in existing
+
+        def fake_exists(path: str) -> bool:
+            return path in existing
 
         args = argparse.Namespace(
             pss_chr=None,
@@ -225,7 +237,9 @@ class TestEnsureProcessedInputs:
         assert calls == ["sumstats", "sannots"]
 
     def test_preprocess_mode_rejects_missing_pss_inputs_without_sumstats_source(self, monkeypatch) -> None:
-        fake_exists = lambda path: False
+        def fake_exists(path: str) -> bool:
+            del path
+            return False
 
         args = argparse.Namespace(
             pss_chr="sumstats/toy.KG3.95/",

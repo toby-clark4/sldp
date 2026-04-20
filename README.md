@@ -33,7 +33,9 @@ Once this works, take a look at our [wiki](https://github.com/yakirr/sldp/wiki) 
 
 This repository includes a tiny deterministic regression fixture under `tests/fixtures/phase1_tiny/` and a pytest suite that validates the refreshed code against a captured baseline implementation.
 
-The refreshed `sldp` CLI now keeps the main command analysis-only by default. If processed phenotype or annotation artifacts are missing, `sldp` will stop with a clear error instead of creating files implicitly. Use `--preprocess` together with `--config` to build only the missing `.pss.gz`, `.RV.gz`, and `.info` artifacts before continuing.
+The refreshed `sldp` CLI now keeps the main command analysis-only by default. If processed phenotype or annotation artifacts are missing, `sldp` will stop with a clear error instead of creating files implicitly. Use `--sumstats-stem` together with `--preprocess` and `--config` to build only the missing `.pss.gz`, `.RV.gz`, and `.info` artifacts before continuing.
+
+The preprocessing commands `preprocessrefpanel`, `preprocessannot`, and `preprocesspheno` all accept `--num-proc` for opt-in process-level parallelism. The default remains `--num-proc 1`, which preserves the serial baseline behavior. Invalid values are warned about and coerced to `1`.
 
 Typical workflows are:
 
@@ -42,8 +44,16 @@ Typical workflows are:
 sldp --config path/to/config.json --outfile-stem out/toy --pss-chr data/sumstats/toy.KG3.95/ --sannot-chr data/annot/toy_annot.
 
 # Opt-in convenience mode that preprocesses only missing artifacts
-sldp --config path/to/config.json --outfile-stem out/toy --sumstats-stem data/sumstats/toy --sannot-chr data/annot/toy_annot. --preprocess
+# `--num-proc` is forwarded to the preprocessing steps; the main SLDP regression remains serial.
+sldp --config path/to/config.json --outfile-stem out/toy --sumstats-stem data/sumstats/toy --sannot-chr data/annot/toy_annot. --preprocess --num-proc 4
+
+# Direct preprocessing with process-level parallelism
+preprocessrefpanel --config path/to/config.json --chroms 1 2 --num-proc 4
+preprocessannot --config path/to/config.json --sannot-chr data/annot/toy_annot. data/annot/toy_background. --chroms 1 2 --num-proc 4
+preprocesspheno --config path/to/config.json --sumstats-stem data/sumstats/toy --chroms 1 2 --num-proc 4
 ```
+
+Depending on your BLAS/OpenMP setup, you may get better throughput by combining `--num-proc` with `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, or `OPENBLAS_NUM_THREADS=1` to avoid CPU oversubscription.
 
 The current maintainability status and modernization summary are documented in `MAINTAINABILITY_CHECKPOINT.md`.
 
