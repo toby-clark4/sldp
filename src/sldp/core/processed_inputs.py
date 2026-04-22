@@ -29,19 +29,20 @@ def missing_pheno_artifacts(args: argparse.Namespace, *, path_exists=os.path.exi
 def missing_annotation_artifacts(args: argparse.Namespace, *, path_exists=os.path.exists) -> dict[str, list[str]]:
     """List missing processed annotation artifacts keyed by annotation stem."""
 
+    # Foreground annotations are loaded via Annotation.info_df (core/regression.py);
+    # background annotations are read only for their per-SNP RV values.
+    stems_requiring_info = [(s, True) for s in args.sannot_chr] + [(s, False) for s in args.background_sannot_chr]
     missing: dict[str, list[str]] = {}
-    for sannot in args.sannot_chr + args.background_sannot_chr:
-        stem = Path(sannot)
+    for sannot, require_info in stems_requiring_info:
         missing_paths: list[str] = []
         for chrom in args.chroms:
-            rv_path = Path(f"{stem}{chrom}.RV.gz")
-            info_path = Path(f"{stem}{chrom}.info")
-            rv_path_str = str(rv_path)
-            info_path_str = str(info_path)
+            rv_path_str = f"{sannot}{chrom}.RV.gz"
             if not path_exists(rv_path_str):
                 missing_paths.append(rv_path_str)
-            if not path_exists(info_path_str):
-                missing_paths.append(info_path_str)
+            if require_info:
+                info_path_str = f"{sannot}{chrom}.info"
+                if not path_exists(info_path_str):
+                    missing_paths.append(info_path_str)
         if missing_paths:
             missing[sannot] = missing_paths
     return missing
